@@ -1,0 +1,20 @@
+{
+  "name": "gaming-platform",
+  "private": true,
+  "engines": {
+    "node": ">=20.19.3"
+  },
+  "workspaces": [
+    "apps/server",
+    "apps/web"
+  ],
+  "scripts": {
+    "dev": "concurrently -k -n server,web -c blue,green \"npm run dev --workspace=@gaming-platform/server\" \"npm run dev --workspace=@gaming-platform/web\"",
+    "build": "npm run build --workspace=@gaming-platform/server && npm run build --workspace=@gaming-platform/web",
+    "db:migrate": "npm run db:migrate --workspace=@gaming-platform/server",
+    "test": "npm run test --workspace=@gaming-platform/server"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}

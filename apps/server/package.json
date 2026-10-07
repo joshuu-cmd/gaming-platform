@@ -1,0 +1,22 @@
+{
+  "name": "@gaming-platform/server",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "build": "tsc --noEmit",
+    "db:migrate": "tsx src/scripts/migrate.ts",
+    "test": "node --import tsx ../../tests/unit/chess.engine.test.ts"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pg": "^8.16.3"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.0.10",
+    "@types/pg": "^8.15.5",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.3"
+  }
+}
