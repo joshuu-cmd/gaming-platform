@@ -696,6 +696,9 @@ export default function App() {
 
   const currentPlayer = game?.players.find((player) => player?.id === playerId) ?? null;
   const renderedGame = game && optimisticGame?.id === game.id ? optimisticGame : game;
+  const selectedGameName = selectedGame === 'checkers' ? 'Checkers'
+    : selectedGame === 'chess' ? 'Chess'
+      : selectedGame === 'ludo' ? 'Ludo' : 'Connect Four';
   const visibleChessBoard = game?.gameType === 'chess' && pendingChessMove?.gameId === game.id
     ? previewChessMove(game, pendingChessMove)
     : null;
@@ -886,10 +889,10 @@ export default function App() {
         </section>
         <section className="lobby" aria-label="Start or join a match">
           <div className="lobby-card computer-card">
-            <div className="card-icon computer-icon">♟</div>
-            <p className="eyebrow">SOLO PLAY</p>
+            <div className="card-topline"><div className="card-icon computer-icon">♟</div><span className="card-game-tag">{selectedGameName}</span></div>
+            <p className="eyebrow">{selectedGameName.toUpperCase()} · SOLO PLAY</p>
             <h2>Play vs computer</h2>
-            <p className="card-copy">Choose a difficulty and take on the computer.</p>
+            <p className="card-copy">Choose a difficulty and play {selectedGameName} against the computer.</p>
             <div className="lobby-fields">
               <label htmlFor="computer-name">YOUR NAME</label>
               <input id="computer-name" value={playerName} onChange={(event) => setPlayerName(event.target.value)} maxLength={24} />
@@ -904,10 +907,10 @@ export default function App() {
           </div>
 
           <div className="lobby-card create-card">
-            <div className="card-icon sun-icon">✳</div>
-            <p className="eyebrow">PLAY WITH SOMEONE</p>
+            <div className="card-topline"><div className="card-icon sun-icon">✳</div><span className="card-game-tag">{selectedGameName}</span></div>
+            <p className="eyebrow">{selectedGameName.toUpperCase()} · PLAY WITH SOMEONE</p>
             <h2>Choose your opponent</h2>
-            <p className="card-copy">Create a room and invite someone to play.</p>
+            <p className="card-copy">Create a {selectedGameName} room and invite someone to play.</p>
             <form onSubmit={(event) => { event.preventDefault(); void createGame('player'); }}>
               <label htmlFor="create-name">YOUR NAME</label>
               <input id="create-name" value={playerName} onChange={(event) => setPlayerName(event.target.value)} maxLength={24} required />
