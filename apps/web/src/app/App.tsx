@@ -49,6 +49,7 @@ type GameType = Game['gameType'];
 type LastMove = { gameId: string; from: number; to: number };
 type MoveSound = 'move' | 'capture' | 'win' | 'loss' | 'draw';
 type MatchResult = 'win' | 'loss' | 'draw';
+type BoardMoveHint = { from: number; to: number };
 
 function CrownIcon() {
   return <svg viewBox="0 0 24 20" aria-hidden="true" focusable="false">
@@ -192,11 +193,17 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [selectedSquare, setSelectedSquare] = useState<number | null>(null);
   const [legalTargets, setLegalTargets] = useState<number[]>([]);
+  const [availableMoves, setAvailableMoves] = useState<BoardMoveHint[]>([]);
   const [promotionSquare, setPromotionSquare] = useState<number | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(() => window.localStorage.getItem('move-sounds') !== 'off');
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
   const [dismissedResultGameId, setDismissedResultGameId] = useState<string | null>(null);
   const previousGameRef = useRef<Game | null>(null);
+  const moveHintsPositionKey = game?.gameType === 'chess'
+    ? `${game.board.map((piece) => piece ? `${piece.color}:${piece.type}` : '-').join('|')}:${JSON.stringify(game.castling)}:${game.enPassantTarget}`
+    : game?.gameType === 'checkers'
+      ? `${game.forcedFrom ?? ''}:${game.board.map((piece) => piece ? `${piece.side[0]}${piece.king ? 'k' : 'm'}` : '-').join('')}`
+      : '';
 
   useEffect(() => {
     if (!game) {
@@ -248,6 +255,31 @@ export default function App() {
     return () => window.clearInterval(timer);
   }, [game?.id, game?.closedBy?.playerId, busy]);
 
+  useEffect(() => {
+    if (!game || (game.gameType !== 'chess' && game.gameType !== 'checkers')
+      || game.status !== 'in_progress' || !playerId) {
+      setAvailableMoves([]);
+      return;
+    }
+    const currentPlayer = game.players.find((player) => player?.id === playerId);
+    if (playerSide(currentPlayer) !== game.currentTurn) {
+      setAvailableMoves([]);
+      return;
+    }
+    let active = true;
+    request<{ moves: BoardMoveHint[] }>(
+      `/api/games/${encodeURIComponent(game.id)}/legal-moves?playerId=${encodeURIComponent(playerId)}`,
+    ).then(({ moves }) => {
+      if (active) setAvailableMoves(moves);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [game?.id, game?.gameType, game?.status, game?.currentTurn, moveHintsPositionKey, playerId]);
+
+  useEffect(() => {
+    if (selectedSquare === null) return;
+    setLegalTargets(availableMoves.filter((move) => move.from === selectedSquare).map((move) => move.to));
+  }, [availableMoves, selectedSquare]);
+
   async function createGame(opponent: 'player' | 'computer', difficulty?: Difficulty, gameType = selectedGame) {
     prepareMoveAudio();
     setBusy(true);
@@ -261,8 +293,10 @@ export default function App() {
       setPlayerId(result.playerId);
       setGame(result.game);
       setSelectedSquare(null);
+      setAvailableMoves([]);
       setLegalTargets([]);
       setPromotionSquare(null);
+      setDismissedResultGameId(null);
       setRoomCode(result.game.id);
       setGameInUrl(result.game.id);
       setNotice(opponent === 'computer'
@@ -289,6 +323,7 @@ export default function App() {
       setPlayerId(result.playerId);
       setGame(result.game);
       setSelectedSquare(null);
+      setAvailableMoves([]);
       setLegalTargets([]);
       setPromotionSquare(null);
       setGameInUrl(result.game.id);
@@ -322,18 +357,9 @@ export default function App() {
     }
   }
 
-  async function selectChecker(square: number) {
-    if (!game || game.gameType !== 'checkers' || !playerId) return;
+  function selectChecker(square: number) {
     setSelectedSquare(square);
-    setLegalTargets([]);
-    try {
-      const result = await request<{ moves: { from: number; to: number }[] }>(
-        `/api/games/${encodeURIComponent(game.id)}/legal-moves?playerId=${encodeURIComponent(playerId)}`,
-      );
-      setLegalTargets(result.moves.filter((move) => move.from === square).map((move) => move.to));
-    } catch (reason) {
-      setError((reason as Error).message);
-    }
+    setLegalTargets(availableMoves.filter((move) => move.from === square).map((move) => move.to));
   }
 
   async function moveChecker(square: number) {
@@ -342,11 +368,11 @@ export default function App() {
     const piece = game.board[square];
     const ownSide = playerSide(game.players.find((candidate) => candidate?.id === playerId));
     if (selectedSquare === null) {
-      if (piece?.side === ownSide && game.currentTurn === ownSide) await selectChecker(square);
+      if (piece?.side === ownSide && game.currentTurn === ownSide) selectChecker(square);
       return;
     }
     if (piece?.side === ownSide) {
-      if (game.forcedFrom === undefined || square === game.forcedFrom) await selectChecker(square);
+      if (game.forcedFrom === undefined || square === game.forcedFrom) selectChecker(square);
       return;
     }
     if (!legalTargets.includes(square)) return;
@@ -365,14 +391,8 @@ export default function App() {
       }
       setGame(result.game);
       setSelectedSquare(checkersResult?.forcedFrom ?? null);
-      if (checkersResult?.forcedFrom !== undefined) {
-        const hints = await request<{ moves: { from: number; to: number }[] }>(
-          `/api/games/${encodeURIComponent(game.id)}/legal-moves?playerId=${encodeURIComponent(playerId)}`,
-        );
-        setLegalTargets(hints.moves.filter((move) => move.from === checkersResult.forcedFrom).map((move) => move.to));
-      } else {
-        setLegalTargets([]);
-      }
+      setAvailableMoves([]);
+      setLegalTargets([]);
     } catch (reason) {
       setError((reason as Error).message);
     } finally {
@@ -388,15 +408,7 @@ export default function App() {
     if (piece?.color === ownColor) {
       setPromotionSquare(null);
       setSelectedSquare(square);
-      setLegalTargets([]);
-      try {
-        const hints = await request<{ moves: { from: number; to: number }[] }>(
-          `/api/games/${encodeURIComponent(game.id)}/legal-moves?playerId=${encodeURIComponent(playerId)}`,
-        );
-        setLegalTargets(hints.moves.filter((move) => move.from === square).map((move) => move.to));
-      } catch (reason) {
-        setError((reason as Error).message);
-      }
+      setLegalTargets(availableMoves.filter((move) => move.from === square).map((move) => move.to));
       return;
     }
     if (selectedSquare === null || !legalTargets.includes(square)) return;
@@ -426,6 +438,7 @@ export default function App() {
       if (computerWon) await new Promise((resolve) => window.setTimeout(resolve, 750));
       setGame(result.game);
       setSelectedSquare(null);
+      setAvailableMoves([]);
       setLegalTargets([]);
       setPromotionSquare(null);
     } catch (reason) {
@@ -446,8 +459,10 @@ export default function App() {
       });
       setGame(result.game);
       setSelectedSquare(null);
+      setAvailableMoves([]);
       setLegalTargets([]);
       setPromotionSquare(null);
+      setDismissedResultGameId(null);
       setNotice(game.difficulty
         ? `Rematch started on ${game.difficulty} difficulty.`
         : 'Rematch started.');
@@ -509,6 +524,7 @@ export default function App() {
     }
     setGame(null);
     setSelectedSquare(null);
+    setAvailableMoves([]);
     setLegalTargets([]);
     setPromotionSquare(null);
     setPlayerId(null);
@@ -657,7 +673,11 @@ export default function App() {
                   <p className="eyebrow">{gameName} · MATCH COMPLETE</p>
                   <h2 id="result-title">{matchResult === 'win' ? 'You win!' : matchResult === 'loss' ? 'You lose' : 'It’s a draw'}</h2>
                   <p id="result-copy">{matchResult === 'win' ? `Great game. You beat ${opponentName}.` : matchResult === 'loss' ? `${opponentName} wins this time. Ready for a rematch?` : 'A close match. You both played well.'}</p>
-                  <button className="result-dismiss" onClick={() => setDismissedResultGameId(game.id)}>View the board</button>
+                  <div className="result-actions">
+                    <button className="result-dismiss" onClick={() => setDismissedResultGameId(game.id)}>View board</button>
+                    <button className="result-rematch" onClick={() => void rematchGame()} disabled={busy}>{busy ? 'Starting…' : 'Rematch ↻'}</button>
+                    <button className="result-leave" onClick={() => void leaveRoom()} disabled={busy}>Leave room</button>
+                  </div>
                 </section>
               </div>
             )}

@@ -82,8 +82,12 @@ input.code-input { font-family: 'SFMono-Regular', Consolas, monospace; font-size
 .result-dialog .eyebrow { margin-bottom: 7px; }
 .result-dialog h2 { margin: 0; color: var(--ink); font-size: 26px; letter-spacing: -1px; }
 .result-dialog > p:not(.eyebrow) { margin: 8px 0 15px; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.result-dismiss { min-height: 41px; min-width: 155px; padding: 0 17px; border: 2px solid var(--ink); border-radius: 5px; color: var(--ink); background: #e5eddb; font-size: 11px; font-weight: 800; box-shadow: 2px 2px 0 var(--ink); }
-.result-dismiss:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--ink); }
+.result-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.result-actions button { min-width: 0; min-height: 40px; padding: 0 8px; border: 2px solid var(--ink); border-radius: 5px; color: var(--ink); font-size: 10px; font-weight: 800; box-shadow: 2px 2px 0 var(--ink); }
+.result-dismiss { background: #e5eddb; }
+.result-rematch { background: var(--green); }
+.result-leave { grid-column: 1 / -1; background: #ffe1d8; }
+.result-actions button:hover:not(:disabled) { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--ink); }
 footer { border-top: 2px solid var(--ink); display: flex; justify-content: space-between; color: #647168; font-size: 8px; font-weight: 700; padding: 18px 0 23px; margin-top: 50px; }
 .game-layout { max-width: 850px; display: grid; grid-template-columns: minmax(0, 1fr) 235px; gap: 18px; margin: 0 auto; align-items: start; }
 .game-panel, .side-card { border: 2px solid var(--ink); background: var(--paper); border-radius: 8px; box-shadow: 5px 5px 0 var(--ink); }
