@@ -55,8 +55,25 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: { 'Content-Type': 'application/json', ...init?.headers },
   });
-  const result = await response.json();
-  if (!response.ok) throw new Error(result.error ?? 'Request failed.');
+
+  const body = await response.text();
+  let result: unknown;
+  if (body.trim()) {
+    try {
+      result = JSON.parse(body);
+    } catch {
+      throw new Error(`The server returned an invalid response (HTTP ${response.status}).`);
+    }
+  } else if (response.ok) {
+    throw new Error('The server returned an empty response. Please try again.');
+  }
+
+  if (!response.ok) {
+    const message = result && typeof result === 'object' && 'error' in result && typeof result.error === 'string'
+      ? result.error
+      : `Request failed (HTTP ${response.status}).`;
+    throw new Error(message);
+  }
   return result as T;
 }
 
