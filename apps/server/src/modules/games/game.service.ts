@@ -177,6 +177,41 @@ export async function joinGame(id: string, playerName: unknown): Promise<{ game:
   return { game: updated, playerId };
 }
 
+export async function leaveGame(id: string, playerId: unknown): Promise<PlatformGame> {
+  if (typeof playerId !== 'string') throw new GameError('Choose a valid player to leave the room.', 400);
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const stored = await requireGame(id);
+    const game = stored.game;
+    const participant = game.players.find((candidate) => candidate?.id === playerId);
+    if (!participant || participant.isComputer) throw new GameError('You are not a player in this room.', 403);
+    if (game.players.some((candidate) => candidate?.isComputer)) {
+      throw new GameError('Leaving a computer match does not close an online room.', 409);
+    }
+    if (game.closedBy || game.status === 'finished') return game;
+
+    const closed: PlatformGame = {
+      ...game,
+      status: 'finished',
+      winner: null,
+      closedBy: { playerId: participant.id, playerName: participant.name },
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      await gameRepository.update(closed, stored.revision);
+      return closed;
+    } catch (error) {
+      if (!(error instanceof ConcurrentGameUpdateError) || attempt === 2) {
+        if (error instanceof ConcurrentGameUpdateError) {
+          throw new GameError('The room changed while closing. Please try again.', 409);
+        }
+        throw error;
+      }
+    }
+  }
+  throw new GameError('Could not close this room. Please try again.', 409);
+}
+
 function validationError(code: string): GameError {
   switch (code) {
     case 'game_not_active': return new GameError('This game is not accepting moves.', 409);
@@ -251,6 +286,7 @@ export async function rematch(id: string, playerId: unknown): Promise<PlatformGa
   const game = stored.game;
   const participant = game.players.find((candidate) => candidate?.id === playerId);
   if (!participant || participant.isComputer) throw new GameError('You are not a player in this game.', 403);
+  if (game.closedBy) throw new GameError('This room was closed because a player left.', 409);
   if (game.status === 'in_progress') return game;
   if (game.status !== 'finished') throw new GameError('A rematch is available after the game ends.', 409);
 

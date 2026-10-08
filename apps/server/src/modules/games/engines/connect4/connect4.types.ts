@@ -14,6 +14,7 @@ export interface ConnectFourGame {
   gameType: 'connect4';
   id: string;
   status: GameStatus;
+  closedBy?: { playerId: string; playerName: string };
   difficulty?: ComputerDifficulty;
   board: Cell[];
   players: [GamePlayer, GamePlayer | null];

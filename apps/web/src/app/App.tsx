@@ -1,14 +1,17 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
+import ChessPieceGlyph from './ChessPieceGlyph';
 import './app.css';
 
 type Difficulty = 'easy' | 'medium' | 'hard';
 type Disc = 'red' | 'yellow';
+type RoomClosure = { playerId: string; playerName: string };
 type Player = { id: string; name: string; disc?: Disc; side?: 'red' | 'black'; color?: 'white' | 'black'; isComputer?: boolean };
 type GameStatus = 'waiting' | 'in_progress' | 'finished';
 type ConnectFourGame = {
   gameType: 'connect4';
   id: string;
   status: GameStatus;
+  closedBy?: RoomClosure;
   difficulty?: Difficulty;
   board: (Disc | null)[];
   players: [Player, Player | null];
@@ -19,6 +22,7 @@ type CheckersGame = {
   gameType: 'checkers';
   id: string;
   status: GameStatus;
+  closedBy?: RoomClosure;
   difficulty?: Difficulty;
   board: ({ side: 'red' | 'black'; king: boolean } | null)[];
   players: [Player, Player | null];
@@ -31,6 +35,7 @@ type ChessGame = {
   gameType: 'chess';
   id: string;
   status: GameStatus;
+  closedBy?: RoomClosure;
   difficulty?: Difficulty;
   board: (ChessPiece | null)[];
   players: [Player, Player | null];
@@ -41,13 +46,16 @@ type ChessGame = {
 };
 type Game = ConnectFourGame | CheckersGame | ChessGame;
 type GameType = Game['gameType'];
-const chessGlyphs = {
-  white: { king: '♔', queen: '♕', rook: '♖', bishop: '♗', knight: '♘', pawn: '♙' },
-  black: { king: '♚', queen: '♛', rook: '♜', bishop: '♝', knight: '♞', pawn: '♟' },
-} as const;
-
 type LastMove = { gameId: string; from: number; to: number };
-type MoveSound = 'move' | 'capture' | 'finish';
+type MoveSound = 'move' | 'capture' | 'win' | 'loss' | 'draw';
+type MatchResult = 'win' | 'loss' | 'draw';
+
+function CrownIcon() {
+  return <svg viewBox="0 0 24 20" aria-hidden="true" focusable="false">
+    <path d="M2 5.5 7 10l5-8 5 8 5-4.5-2 12H4L2 5.5Z" fill="currentColor" stroke="currentColor" strokeLinejoin="round" strokeWidth="1.5" />
+    <path d="M4.2 15.2h15.6" fill="none" stroke="#fffdf6" strokeLinecap="round" strokeWidth="1.2" />
+  </svg>;
+}
 
 let moveAudioContext: AudioContext | null = null;
 let moveAudioUnlocked = false;
@@ -67,17 +75,20 @@ function playMoveSound(kind: MoveSound): void {
     prepareMoveAudio();
     const context = moveAudioContext;
     if (!context) return;
-    const notes = kind === 'capture' ? [235, 175] : kind === 'finish' ? [392, 494, 587] : [360];
+    const notes = kind === 'capture' ? [235, 175]
+      : kind === 'win' ? [523, 659, 784, 1047]
+        : kind === 'loss' ? [330, 262, 196]
+          : kind === 'draw' ? [392, 349, 392] : [360];
     const start = context.currentTime;
     notes.forEach((frequency, index) => {
       const oscillator = context.createOscillator();
       const volume = context.createGain();
       const noteStart = start + index * 0.075;
-      const duration = kind === 'finish' ? 0.18 : 0.12;
-      oscillator.type = kind === 'capture' ? 'triangle' : 'sine';
+      const duration = ['win', 'loss', 'draw'].includes(kind) ? 0.2 : 0.12;
+      oscillator.type = kind === 'capture' || kind === 'loss' ? 'triangle' : 'sine';
       oscillator.frequency.setValueAtTime(frequency, noteStart);
       volume.gain.setValueAtTime(0.0001, noteStart);
-      volume.gain.exponentialRampToValueAtTime(kind === 'finish' ? 0.055 : 0.035, noteStart + 0.012);
+      volume.gain.exponentialRampToValueAtTime(kind === 'win' ? 0.055 : kind === 'loss' ? 0.045 : 0.035, noteStart + 0.012);
       volume.gain.exponentialRampToValueAtTime(0.0001, noteStart + duration);
       oscillator.connect(volume);
       volume.connect(context.destination);
@@ -125,6 +136,12 @@ function inferLastMove(previous: Game, current: Game): LastMove | null {
 
 function playerSide(player: Player | null | undefined): string | undefined {
   return player?.disc ?? player?.side ?? player?.color;
+}
+
+function resultSound(game: Game, currentPlayerId: string | null): Exclude<MoveSound, 'move' | 'capture'> {
+  if (!game.winner) return 'draw';
+  const currentPlayer = game.players.find((player) => player?.id === currentPlayerId);
+  return currentPlayer && playerSide(currentPlayer) === game.winner ? 'win' : 'loss';
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -178,6 +195,7 @@ export default function App() {
   const [promotionSquare, setPromotionSquare] = useState<number | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(() => window.localStorage.getItem('move-sounds') !== 'off');
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
+  const [dismissedResultGameId, setDismissedResultGameId] = useState<string | null>(null);
   const previousGameRef = useRef<Game | null>(null);
 
   useEffect(() => {
@@ -197,16 +215,20 @@ export default function App() {
           const previousPieceCount = previous.board.filter(Boolean).length;
           const currentPieceCount = game.board.filter(Boolean).length;
           const sound: MoveSound = game.status === 'finished'
-            ? 'finish'
+            ? resultSound(game, playerId)
             : currentPieceCount < previousPieceCount ? 'capture' : 'move';
           playMoveSound(sound);
         }
       } else if (previous.status !== 'finished' && game.status === 'finished' && soundEnabled) {
-        playMoveSound('finish');
+        playMoveSound(resultSound(game, playerId));
       }
     }
+    if (game.closedBy && game.closedBy.playerId !== playerId
+      && (previous?.id !== game.id || previous.closedBy?.playerId !== game.closedBy.playerId)) {
+      setNotice(`${game.closedBy.playerName} left the room. The match is closed.`);
+    }
     previousGameRef.current = game;
-  }, [game, soundEnabled]);
+  }, [game, playerId, soundEnabled]);
 
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get('game');
@@ -217,14 +239,14 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!game) return;
+    if (!game || game.closedBy) return;
     const timer = window.setInterval(() => {
       request<{ game: Game }>(`/api/games/${encodeURIComponent(game.id)}`)
         .then(({ game: latest }) => { if (!busy) setGame(latest); })
         .catch(() => undefined);
     }, 1500);
     return () => window.clearInterval(timer);
-  }, [game?.id, busy]);
+  }, [game?.id, game?.closedBy?.playerId, busy]);
 
   async function createGame(opponent: 'player' | 'computer', difficulty?: Difficulty, gameType = selectedGame) {
     prepareMoveAudio();
@@ -464,7 +486,27 @@ export default function App() {
     }
   }
 
-  function leaveRoom() {
+  async function leaveRoom() {
+    const activeGame = game;
+    const activePlayerId = playerId;
+    const shouldCloseOnlineRoom = Boolean(activeGame && activePlayerId && activeGame.status !== 'finished'
+      && !activeGame.players.some((player) => player?.isComputer));
+    let leaveError = '';
+    let leaveNotice = '';
+    if (shouldCloseOnlineRoom && activeGame && activePlayerId) {
+      setBusy(true);
+      try {
+        await request<{ game: Game }>(`/api/games/${encodeURIComponent(activeGame.id)}/leave`, {
+          method: 'POST',
+          body: JSON.stringify({ playerId: activePlayerId }),
+        });
+        leaveNotice = 'Room closed. Your opponent has been notified.';
+      } catch (reason) {
+        leaveError = (reason as Error).message;
+      } finally {
+        setBusy(false);
+      }
+    }
     setGame(null);
     setSelectedSquare(null);
     setLegalTargets([]);
@@ -474,6 +516,8 @@ export default function App() {
     setError('');
     setRoomCode('');
     setGameInUrl(null);
+    setNotice(leaveNotice);
+    setError(leaveError);
   }
 
   function toggleMoveSounds() {
@@ -488,6 +532,22 @@ export default function App() {
   }
 
   const currentPlayer = game?.players.find((player) => player?.id === playerId) ?? null;
+  const matchResult: MatchResult | null = game?.status !== 'finished' || game.closedBy
+    ? null
+    : !game.winner ? 'draw'
+      : currentPlayer ? (playerSide(currentPlayer) === game.winner ? 'win' : 'loss')
+        : null;
+  const showResultPopup = Boolean(game && matchResult && dismissedResultGameId !== game.id);
+  const opponentName = game?.players.find((player) => player && player.id !== playerId)?.name ?? 'your opponent';
+  const promotionDisplayColumn = promotionSquare === null
+    ? null
+    : (currentPlayer?.color === 'black' ? 63 - promotionSquare : promotionSquare) % 8;
+  const winnerKingSquare = game?.gameType === 'chess' && game.status === 'finished' && game.winner
+    ? game.board.findIndex((piece) => piece?.type === 'king' && piece.color === game.winner)
+    : -1;
+  const defeatedKingSquare = game?.gameType === 'chess' && game.status === 'finished' && game.winner
+    ? game.board.findIndex((piece) => piece?.type === 'king' && piece.color !== game.winner)
+    : -1;
   const canJoin = game?.status === 'waiting' && !currentPlayer;
   const turnPlayer = game?.players.find((player) => playerSide(player) === game.currentTurn) ?? null;
   const gameName = game?.gameType === 'checkers' ? 'CHECKERS' : game?.gameType === 'chess' ? 'CHESS' : 'CONNECT FOUR';
@@ -517,7 +577,7 @@ export default function App() {
             <div className="game-heading">
               <div>
                 <p className="eyebrow">{gameName}</p>
-                <h2>{game.players[1]?.isComputer ? 'You vs Computer' : game.status === 'waiting' ? 'Waiting for a friend' : 'Your match'}</h2>
+                <h2>{game.closedBy ? 'Room closed' : game.players[1]?.isComputer ? 'You vs Computer' : game.status === 'waiting' ? 'Waiting for a friend' : 'Your match'}</h2>
               </div>
               <div className="game-heading-actions">
                 <button className="sound-toggle" onClick={toggleMoveSounds} aria-pressed={soundEnabled} aria-label={`Turn move sounds ${soundEnabled ? 'off' : 'on'}`}>
@@ -526,6 +586,7 @@ export default function App() {
                 <button className="quiet-button" onClick={leaveRoom}>Leave room</button>
               </div>
             </div>
+            <div className="board-result-anchor">
             {game.gameType === 'connect4' ? <>
               <div className="board-toolbar">
                 {Array.from({ length: 7 }, (_, column) => (
@@ -552,7 +613,8 @@ export default function App() {
                 </button>;
               })}
             </div>
-            </> : <div className="chess-board" role="grid" aria-label="Chess board">
+            </> : <div className="chess-board-wrap">
+              <div className="chess-board" role="grid" aria-label="Chess board">
               {Array.from({ length: 64 }, (_, displayIndex) => {
                 const index = currentPlayer?.color === 'black' ? 63 - displayIndex : displayIndex;
                 const row = Math.floor(index / 8);
@@ -565,37 +627,52 @@ export default function App() {
                 const isBlackView = currentPlayer?.color === 'black';
                 const fileLabel = String.fromCharCode((isBlackView ? 104 - displayColumn : 97 + displayColumn));
                 const rankLabel = String(isBlackView ? displayRow + 1 : 8 - displayRow);
-                return <button key={index} role="gridcell" className={`chess-square ${(row + column) % 2 === 0 ? 'light' : 'dark'} ${selectedSquare === index ? 'selected' : ''} ${isHint ? 'hint' : ''} ${isHint && piece && piece.color !== currentPlayer?.color ? 'capture-hint' : ''} ${lastMove?.gameId === game.id && (lastMove.from === index || lastMove.to === index) ? 'last-move' : ''} ${lastMove?.gameId === game.id && lastMove.to === index ? 'last-destination' : ''}`}
+                const isResultKing = index === winnerKingSquare || index === defeatedKingSquare;
+                const resultBadge = index === winnerKingSquare ? 'winner' : index === defeatedKingSquare ? 'defeated' : null;
+                return <button key={index} role="gridcell" className={`chess-square ${(row + column) % 2 === 0 ? 'light' : 'dark'} ${selectedSquare === index ? 'selected' : ''} ${isHint ? 'hint' : ''} ${isHint && piece && piece.color !== currentPlayer?.color ? 'capture-hint' : ''} ${lastMove?.gameId === game.id && (lastMove.from === index || lastMove.to === index) ? 'last-move' : ''} ${lastMove?.gameId === game.id && lastMove.to === index ? 'last-destination' : ''} ${isResultKing ? 'chess-result-square' : ''}`}
                   onClick={() => void moveChess(index)} disabled={busy || game.status !== 'in_progress' || !ownTurn}
                   aria-label={`Row ${8 - row}, column ${String.fromCharCode(97 + column)}${piece ? `, ${piece.color} ${piece.type}` : ''}${isHint ? ', legal destination' : ''}`}>
-                  {piece && <span className={`chess-piece ${piece.color}`}>{chessGlyphs[piece.color][piece.type]}</span>}
+                  {piece && <ChessPieceGlyph type={piece.type} color={piece.color} />}
+                  {resultBadge && <span className={`chess-result-badge ${resultBadge}`} role="img" aria-label={resultBadge === 'winner' ? 'Winning king' : 'Defeated king'}><CrownIcon /></span>}
                   {displayColumn === 0 && <span className="chess-coordinate rank-coordinate">{rankLabel}</span>}
                   {displayRow === 7 && <span className="chess-coordinate file-coordinate">{fileLabel}</span>}
                 </button>;
               })}
-            </div>}
-            {game.gameType === 'chess' && promotionSquare !== null && (
-              <div className="promotion-panel" role="group" aria-label="Choose a promotion piece">
-                <span>Promote pawn to</span>
+              </div>
+              {game.gameType === 'chess' && promotionSquare !== null && promotionDisplayColumn !== null && (
+                <div className="promotion-menu" role="group" aria-label="Choose a promotion piece" style={{ left: `calc(3px + ${promotionDisplayColumn * 12.5}% - ${promotionDisplayColumn * 0.75}px)` }}>
                 {(['queen', 'rook', 'bishop', 'knight'] as const).map((type) => (
-                  <button key={type} className="promotion-choice" disabled={busy} onClick={() => void submitChessMove(promotionSquare, type)}>
-                    <span className={`chess-piece ${game.currentTurn}`}>{chessGlyphs[game.currentTurn][type]}</span>
-                    <span>{type[0]!.toUpperCase() + type.slice(1)}</span>
+                  <button key={type} className="promotion-menu-choice" disabled={busy} onClick={() => void submitChessMove(promotionSquare, type)} aria-label={`Promote to ${type}`} title={`Promote to ${type}`}>
+                    <ChessPieceGlyph type={type} color={game.currentTurn} />
                   </button>
                 ))}
-                <button className="promotion-cancel" onClick={() => setPromotionSquare(null)}>Cancel</button>
+                </div>
+              )}
+              </div>
+            }
+            {showResultPopup && game && matchResult && (
+              <div className="board-result-layer">
+                <section className={`result-dialog ${matchResult}`} role="dialog" aria-labelledby="result-title" aria-describedby="result-copy">
+                  <div className="result-dialog-mark" aria-hidden="true">{matchResult === 'win' ? <CrownIcon /> : matchResult === 'loss' ? '♟' : '＝'}</div>
+                  <p className="eyebrow">{gameName} · MATCH COMPLETE</p>
+                  <h2 id="result-title">{matchResult === 'win' ? 'You win!' : matchResult === 'loss' ? 'You lose' : 'It’s a draw'}</h2>
+                  <p id="result-copy">{matchResult === 'win' ? `Great game. You beat ${opponentName}.` : matchResult === 'loss' ? `${opponentName} wins this time. Ready for a rematch?` : 'A close match. You both played well.'}</p>
+                  <button className="result-dismiss" onClick={() => setDismissedResultGameId(game.id)}>View the board</button>
+                </section>
               </div>
             )}
+            </div>
             <div className="game-status" aria-live="polite">
               {game.status === 'waiting' && <><span className="status-dot waiting" /> Waiting for a second player</>}
               {game.status === 'in_progress' && <><span className={`status-dot ${game.currentTurn}`} /> {currentPlayer && playerSide(currentPlayer) === game.currentTurn ? 'Your turn' : `${turnPlayer?.name ?? 'Player'}’s turn`}</>}
-              {game.status === 'finished' && (game.winner ? <><span className={`status-dot ${game.winner}`} /> {game.players.find((player) => playerSide(player) === game.winner)?.name} wins!</> : game.gameType === 'chess' && game.drawReason ? `Draw · ${game.drawReason.replaceAll('_', ' ')}` : 'It’s a draw!')}
+              {game.closedBy && <><span className="status-dot waiting" /> {game.closedBy.playerId === playerId ? 'You closed this room.' : `${game.closedBy.playerName} left. This match is closed.`}</>}
+              {game.status === 'finished' && !game.closedBy && (game.winner ? <><span className={`status-dot ${game.winner}`} /> {game.players.find((player) => playerSide(player) === game.winner)?.name} wins!</> : game.gameType === 'chess' && game.drawReason ? `Draw · ${game.drawReason.replaceAll('_', ' ')}` : 'It’s a draw!')}
             </div>
             {game.gameType === 'chess' && game.status === 'in_progress' && game.drawClaimAvailable
               && currentPlayer && playerSide(currentPlayer) === game.currentTurn && (
                 <button className="draw-claim-button" onClick={() => void claimDraw()} disabled={busy}>Claim draw</button>
               )}
-            {game.status === 'finished' && currentPlayer && (
+            {game.status === 'finished' && !game.closedBy && currentPlayer && (
               <button className="rematch-button" onClick={() => void rematchGame()} disabled={busy}>
                 Rematch{game.difficulty ? ` · ${game.difficulty.toUpperCase()}` : ''} <span>↻</span>
               </button>
@@ -604,7 +681,7 @@ export default function App() {
 
           <aside className="match-sidebar">
             <div className="side-card">
-              <div className="side-card-title"><span>THE MATCH</span><span className="live-label">● LIVE</span></div>
+              <div className="side-card-title"><span>THE MATCH</span><span className={game.closedBy ? 'closed-label' : 'live-label'}>● {game.closedBy ? 'CLOSED' : 'LIVE'}</span></div>
               {game.players.map((player, index) => (
                 <div className="player-row" key={player?.id ?? index}>
                   <span className={`avatar ${playerSide(player) ?? (index === 0 ? 'red' : game.gameType === 'connect4' ? 'yellow' : 'black')}`}>{player?.name.slice(0, 1).toUpperCase() ?? '·'}</span>

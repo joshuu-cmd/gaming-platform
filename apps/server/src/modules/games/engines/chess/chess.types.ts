@@ -24,6 +24,7 @@ export interface ChessGame {
   gameType: 'chess';
   id: string;
   status: 'waiting' | 'in_progress' | 'finished';
+  closedBy?: { playerId: string; playerName: string };
   difficulty?: ChessDifficulty;
   board: (ChessPiece | null)[];
   players: [ChessPlayer, ChessPlayer | null];

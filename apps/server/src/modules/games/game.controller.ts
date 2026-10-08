@@ -25,6 +25,11 @@ export async function joinGame(request: Request, response: Response): Promise<vo
   response.status(200).json(result);
 }
 
+export async function leaveGame(request: Request, response: Response): Promise<void> {
+  const game = await games.leaveGame(routeId(request), request.body?.playerId);
+  response.status(200).json({ game });
+}
+
 export async function makeMove(request: Request, response: Response): Promise<void> {
   const move = request.body?.move ?? request.body?.column;
   const game = await games.makeMove(routeId(request), request.body?.playerId, move);

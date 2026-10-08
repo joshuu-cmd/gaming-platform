@@ -25,6 +25,7 @@ export interface CheckersGame {
   gameType: 'checkers';
   id: string;
   status: CheckersStatus;
+  closedBy?: { playerId: string; playerName: string };
   difficulty?: CheckersDifficulty;
   board: CheckersCell[];
   players: [CheckersPlayer, CheckersPlayer | null];
