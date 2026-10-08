@@ -42,7 +42,7 @@ export const gameRepository = {
       'SELECT state, game_type, revision FROM games WHERE id = $1',
       [id],
     );
-    const row = result.rows[0] as { state: PlatformGame; game_type: 'connect4' | 'checkers' | 'chess'; revision: number } | undefined;
+    const row = result.rows[0] as { state: PlatformGame; game_type: 'connect4' | 'checkers' | 'chess' | 'ludo'; revision: number } | undefined;
     return row ? {
       game: { ...row.state, gameType: row.state.gameType ?? row.game_type } as PlatformGame,
       revision: Number(row.revision),

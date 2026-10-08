@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import ChessPieceGlyph from './ChessPieceGlyph';
+import LudoBoard from './LudoBoard';
 import './app.css';
 
 type Difficulty = 'easy' | 'medium' | 'hard';
 type Disc = 'red' | 'yellow';
 type RoomClosure = { playerId: string; playerName: string };
-type Player = { id: string; name: string; disc?: Disc; side?: 'red' | 'black'; color?: 'white' | 'black'; isComputer?: boolean };
+type Player = { id: string; name: string; disc?: Disc; side?: 'red' | 'black' | 'blue'; color?: 'white' | 'black'; isComputer?: boolean };
 type GameStatus = 'waiting' | 'in_progress' | 'finished';
 type ConnectFourGame = {
   gameType: 'connect4';
@@ -41,13 +42,47 @@ type ChessGame = {
   players: [Player, Player | null];
   currentTurn: 'white' | 'black';
   winner: 'white' | 'black' | null;
-  drawReason?: string;
-  drawClaimAvailable?: boolean;
+  castling: {
+    white: {
+      kingSide: boolean;
+      queenSide: boolean;
+    };
+    black: {
+      kingSide: boolean;
+      queenSide: boolean;
+    };
+  };
+  enPassantTarget: number | null;
+  halfmoveClock: number;
+  positionCounts: Record<string, number>;
+  drawClaimAvailable: boolean;
+  drawReason?:
+    | 'stalemate'
+    | 'fifty_move'
+    | 'seventy_five_move'
+    | 'repetition'
+    | 'insufficient_material';
 };
-type Game = ConnectFourGame | CheckersGame | ChessGame;
+type LudoColor = 'red' | 'blue';
+type LudoGame = {
+  gameType: 'ludo';
+  id: string;
+  status: GameStatus;
+  closedBy?: RoomClosure;
+  difficulty?: Difficulty;
+  players: [Player, Player | null];
+  tokens: Record<LudoColor, number[]>;
+  currentTurn: LudoColor;
+  winner: LudoColor | null;
+  dice: number | null;
+  lastDice: number | null;
+  lastRollNoMoves: boolean;
+  legalTokens: number[];
+};
+type Game = ConnectFourGame | CheckersGame | ChessGame | LudoGame;
 type GameType = Game['gameType'];
 type LastMove = { gameId: string; from: number; to: number };
-type MoveSound = 'move' | 'capture' | 'win' | 'loss' | 'draw';
+type MoveSound = 'move' | 'capture' | 'roll' | 'win' | 'loss' | 'draw';
 type MatchResult = 'win' | 'loss' | 'draw';
 type BoardMoveHint = { from: number; to: number };
 
@@ -77,6 +112,7 @@ function playMoveSound(kind: MoveSound): void {
     const context = moveAudioContext;
     if (!context) return;
     const notes = kind === 'capture' ? [235, 175]
+      : kind === 'roll' ? [520, 390]
       : kind === 'win' ? [523, 659, 784, 1047]
         : kind === 'loss' ? [330, 262, 196]
           : kind === 'draw' ? [392, 349, 392] : [360];
@@ -137,6 +173,11 @@ function inferLastMove(previous: Game, current: Game): LastMove | null {
 
 function playerSide(player: Player | null | undefined): string | undefined {
   return player?.disc ?? player?.side ?? player?.color;
+}
+
+function gamePieceCount(game: Game): number {
+  if (game.gameType === 'ludo') return game.tokens.red.filter((progress) => progress >= 0).length + game.tokens.blue.filter((progress) => progress >= 0).length;
+  return game.board.filter(Boolean).length;
 }
 
 function resultSound(game: Game, currentPlayerId: string | null): Exclude<MoveSound, 'move' | 'capture'> {
@@ -219,8 +260,8 @@ export default function App() {
       if (move) {
         setLastMove(move);
         if (soundEnabled) {
-          const previousPieceCount = previous.board.filter(Boolean).length;
-          const currentPieceCount = game.board.filter(Boolean).length;
+          const previousPieceCount = gamePieceCount(previous);
+          const currentPieceCount = gamePieceCount(game);
           const sound: MoveSound = game.status === 'finished'
             ? resultSound(game, playerId)
             : currentPieceCount < previousPieceCount ? 'capture' : 'move';
@@ -228,6 +269,9 @@ export default function App() {
         }
       } else if (previous.status !== 'finished' && game.status === 'finished' && soundEnabled) {
         playMoveSound(resultSound(game, playerId));
+      } else if (previous.gameType === 'ludo' && game.gameType === 'ludo'
+        && JSON.stringify(previous.tokens) !== JSON.stringify(game.tokens) && soundEnabled) {
+        playMoveSound('move');
       }
     }
     if (game.closedBy && game.closedBy.playerId !== playerId
@@ -349,6 +393,42 @@ export default function App() {
       if (computerEndsGame) {
         await new Promise((resolve) => window.setTimeout(resolve, 750));
       }
+      setGame(result.game);
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function rollLudoDice() {
+    if (!game || game.gameType !== 'ludo' || !playerId || busy) return;
+    prepareMoveAudio();
+    setError('');
+    setBusy(true);
+    try {
+      const result = await request<{ game: Game }>(`/api/games/${encodeURIComponent(game.id)}/moves`, {
+        method: 'POST',
+        body: JSON.stringify({ playerId, move: { action: 'roll' } }),
+      });
+      if (soundEnabled) playMoveSound('roll');
+      setGame(result.game);
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function moveLudoToken(token: number) {
+    if (!game || game.gameType !== 'ludo' || !playerId || busy) return;
+    setBusy(true);
+    setError('');
+    try {
+      const result = await request<{ game: Game }>(`/api/games/${encodeURIComponent(game.id)}/moves`, {
+        method: 'POST',
+        body: JSON.stringify({ playerId, move: { action: 'move', token } }),
+      });
       setGame(result.game);
     } catch (reason) {
       setError((reason as Error).message);
@@ -566,7 +646,7 @@ export default function App() {
     : -1;
   const canJoin = game?.status === 'waiting' && !currentPlayer;
   const turnPlayer = game?.players.find((player) => playerSide(player) === game.currentTurn) ?? null;
-  const gameName = game?.gameType === 'checkers' ? 'CHECKERS' : game?.gameType === 'chess' ? 'CHESS' : 'CONNECT FOUR';
+  const gameName = game?.gameType === 'checkers' ? 'CHECKERS' : game?.gameType === 'chess' ? 'CHESS' : game?.gameType === 'ludo' ? 'LUDO' : 'CONNECT FOUR';
 
   return (
     <main className="page-shell">
@@ -575,13 +655,13 @@ export default function App() {
           <span className="brand-mark"><img src="/m-s-logo.jpg" alt="" /></span>
           <span>GAMING PLATFORM</span>
         </a>
-        <span className="prototype-tag"><span /> FREE PLAY · {game ? gameName : 'THREE GAMES'}</span>
+        <span className="prototype-tag"><span /> FREE PLAY · {game ? gameName : 'FOUR GAMES'}</span>
       </header>
 
       <section className="hero">
         <p className="eyebrow">QUICK MATCH · {game ? gameName : 'PICK A GAME'}</p>
-        <h1>{!game ? <>Choose your game.<br /><em>Make your move.</em></> : game.gameType === 'checkers' ? <>A clever move.<br /><em>A clear path.</em></> : game.gameType === 'chess' ? <>Think ahead.<br /><em>Own the board.</em></> : <>Four in a row.<br /><em>Make it count.</em></>}</h1>
-        <p className="hero-copy">{!game ? <>Play Connect Four, Checkers, or Chess.<br />Challenge a friend or take on the computer.</> : game.gameType === 'checkers' ? <>Jump, capture, and crown your pieces.<br />Play a friend or challenge the computer.</> : game.gameType === 'chess' ? <>Make a plan, protect your king, and checkmate.<br />Play a friend or challenge the computer.</> : <>Drop a disc, line up four, and take the bragging rights.<br />Play a friend or try your luck against the computer.</>}</p>
+        <h1>{!game ? <>Choose your game.<br /><em>Make your move.</em></> : game.gameType === 'checkers' ? <>A clever move.<br /><em>A clear path.</em></> : game.gameType === 'chess' ? <>Think ahead.<br /><em>Own the board.</em></> : game.gameType === 'ludo' ? <>Roll the dice.<br /><em>Race for home.</em></> : <>Four in a row.<br /><em>Make it count.</em></>}</h1>
+        <p className="hero-copy">{!game ? <>Play Connect Four, Checkers, Chess, or Ludo.<br />Challenge a friend or take on the computer.</> : game.gameType === 'checkers' ? <>Jump, capture, and crown your pieces.<br />Play a friend or challenge the computer.</> : game.gameType === 'chess' ? <>Make a plan, protect your king, and checkmate.<br />Play a friend or challenge the computer.</> : game.gameType === 'ludo' ? <>Roll a six, race your tokens, and send rivals home.<br />Play a friend or challenge the computer.</> : <>Drop a disc, line up four, and take the bragging rights.<br />Play a friend or try your luck against the computer.</>}</p>
       </section>
 
       {error && <div className="feedback error" role="alert">{error}</div>}
@@ -629,7 +709,13 @@ export default function App() {
                 </button>;
               })}
             </div>
-            </> : <div className="chess-board-wrap">
+            </> : game.gameType === 'ludo' ? <LudoBoard
+              game={game}
+              playerColor={currentPlayer?.side === 'red' || currentPlayer?.side === 'blue' ? currentPlayer.side : undefined}
+              busy={busy}
+              onRoll={() => void rollLudoDice()}
+              onMoveToken={(token) => void moveLudoToken(token)}
+            /> : <div className="chess-board-wrap">
               <div className="chess-board" role="grid" aria-label="Chess board">
               {Array.from({ length: 64 }, (_, displayIndex) => {
                 const index = currentPlayer?.color === 'black' ? 63 - displayIndex : displayIndex;
@@ -704,15 +790,15 @@ export default function App() {
               <div className="side-card-title"><span>THE MATCH</span><span className={game.closedBy ? 'closed-label' : 'live-label'}>● {game.closedBy ? 'CLOSED' : 'LIVE'}</span></div>
               {game.players.map((player, index) => (
                 <div className="player-row" key={player?.id ?? index}>
-                  <span className={`avatar ${playerSide(player) ?? (index === 0 ? 'red' : game.gameType === 'connect4' ? 'yellow' : 'black')}`}>{player?.name.slice(0, 1).toUpperCase() ?? '·'}</span>
-                  <span className="player-details"><strong>{player?.name ?? 'Open seat'}</strong><small>{player?.isComputer ? `COMPUTER · ${game.difficulty?.toUpperCase() ?? 'MEDIUM'}` : (playerSide(player) ?? (index === 0 ? 'red' : game.gameType === 'connect4' ? 'yellow' : 'black')).toUpperCase()}</small></span>
+                  <span className={`avatar ${playerSide(player) ?? (index === 0 ? 'red' : game.gameType === 'connect4' ? 'yellow' : game.gameType === 'ludo' ? 'blue' : 'black')}`}>{player?.name.slice(0, 1).toUpperCase() ?? '·'}</span>
+                  <span className="player-details"><strong>{player?.name ?? 'Open seat'}</strong><small>{player?.isComputer ? `COMPUTER · ${game.difficulty?.toUpperCase() ?? 'MEDIUM'}` : (playerSide(player) ?? (index === 0 ? 'red' : game.gameType === 'connect4' ? 'yellow' : game.gameType === 'ludo' ? 'blue' : 'black')).toUpperCase()}</small></span>
                   {player?.id === playerId && <span className="you-tag">YOU</span>}
                 </div>
               ))}
             </div>
             {!game.players[1]?.isComputer && <div className="side-card invite-card">
               <div className="side-card-title">PLAY WITH A FRIEND</div>
-              <p>{game.gameType === 'checkers' ? 'Invite someone to capture pieces and crown a winner.' : game.gameType === 'chess' ? 'Invite someone to play a thoughtful match of chess.' : 'Send someone an invite and see who gets four in a row.'}</p>
+              <p>{game.gameType === 'checkers' ? 'Invite someone to capture pieces and crown a winner.' : game.gameType === 'chess' ? 'Invite someone to play a thoughtful match of chess.' : game.gameType === 'ludo' ? 'Invite someone to roll, race, and send tokens home.' : 'Send someone an invite and see who gets four in a row.'}</p>
               <button className="invite-button" onClick={copyInvite}>Copy invite link <span>↗</span></button>
               <small className="room-code">ROOM CODE · {game.id}</small>
             </div>}
@@ -721,7 +807,7 @@ export default function App() {
       ) : (
         <>
         <section className="game-picker" aria-label="Choose a game">
-          {([['connect4', 'Connect Four', 'Line up four discs to win.'], ['checkers', 'Checkers', 'Capture pieces and crown your kings.'], ['chess', 'Chess', 'Plan ahead and checkmate the king.']] as const).map(([type, title, copy]) => (
+          {([['connect4', 'Connect Four', 'Line up four discs to win.'], ['checkers', 'Checkers', 'Capture pieces and crown your kings.'], ['chess', 'Chess', 'Plan ahead and checkmate the king.'], ['ludo', 'Ludo', 'Roll a six and race home.']] as const).map(([type, title, copy]) => (
             <button key={type} className={`game-choice ${selectedGame === type ? 'active' : ''}`} onClick={() => setSelectedGame(type)} aria-pressed={selectedGame === type}>
               <span className="game-choice-name">{title}</span><span className="game-choice-copy">{copy}</span>
             </button>

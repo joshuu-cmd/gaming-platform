@@ -2,8 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { applyMove, chooseComputerMove, connectFourEngine, createEmptyBoard } from './engines/connect4/connect4.engine.js';
 import { applyCheckersMove, checkersEngine, chooseCheckersMove, createCheckersBoard, legalMoves } from './engines/checkers/checkers.engine.js';
 import { applyChessMove, chessEngine, chooseChessMove, claimableDrawReason, legalChessMoves, newChessGameState } from './engines/chess/chess.engine.js';
+import { applyLudoAction, chooseLudoToken, ludoEngine, moveLudoToken, newLudoGameState, rollLudoDice } from './engines/ludo/ludo.engine.js';
+import { isLudoAction } from './engines/ludo/ludo.validator.js';
 import { ConcurrentGameUpdateError, gameRepository } from './game.repository.js';
-import type { CheckersDifficulty, CheckersGame, CheckersMove, ChessDifficulty, ChessGame, ChessMove, ChessPlayer, ComputerDifficulty, ConnectFourGame, Disc, GamePlayer, PlatformGame } from './game.types.js';
+import type { CheckersDifficulty, CheckersGame, CheckersMove, ChessDifficulty, ChessGame, ChessMove, ChessPlayer, ComputerDifficulty, ConnectFourGame, Disc, GamePlayer, LudoAction, LudoDifficulty, LudoGame, LudoPlayer, PlatformGame } from './game.types.js';
 
 export class GameError extends Error {
   constructor(message: string, public readonly statusCode = 400) {
@@ -19,15 +21,16 @@ function cleanName(value: unknown): string {
   return name;
 }
 
-function cleanDifficulty(value: unknown): ComputerDifficulty | CheckersDifficulty | ChessDifficulty {
+function cleanDifficulty(value: unknown): ComputerDifficulty | CheckersDifficulty | ChessDifficulty | LudoDifficulty {
   if (value === 'easy' || value === 'medium' || value === 'hard') return value;
   throw new GameError('Choose Easy, Medium, or Hard.');
 }
 
-function cleanGameType(value: unknown): 'connect4' | 'checkers' | 'chess' {
+function cleanGameType(value: unknown): 'connect4' | 'checkers' | 'chess' | 'ludo' {
   if (value === undefined || value === 'connect4') return 'connect4';
   if (value === 'checkers') return value;
   if (value === 'chess') return value;
+  if (value === 'ludo') return value;
   throw new GameError('Choose Connect Four, Checkers, or Chess.');
 }
 
@@ -70,6 +73,23 @@ export async function createGame(
   const id = randomUUID();
 
   if (gameType === 'chess') return createChessGame(firstName, opponent, requestedDifficulty);
+
+  if (gameType === 'ludo') {
+    const first: LudoPlayer = { id: randomUUID(), name: firstName, side: 'red' };
+    const second: LudoPlayer | null = versusComputer ? { id: randomUUID(), name: 'Computer', side: 'blue', isComputer: true } : null;
+    const game: LudoGame = {
+      ...newLudoGameState(),
+      gameType,
+      id,
+      status: versusComputer ? 'in_progress' : 'waiting',
+      ...(difficulty ? { difficulty: difficulty as LudoDifficulty } : {}),
+      players: [first, second],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await gameRepository.create(game);
+    return { game, playerId: first.id };
+  }
 
   if (gameType === 'connect4') {
     const first = { ...player(firstName, 'red'), disc: 'red' as const };
@@ -124,7 +144,7 @@ export async function getGame(id: string): Promise<PlatformGame> {
 
 export async function getBoardLegalMoves(id: string, playerId: unknown): Promise<(CheckersMove | ChessMove)[]> {
   const { game } = await requireGame(id);
-  if (game.gameType === 'connect4') throw new GameError('Move hints are only available for Checkers and Chess.', 400);
+  if (game.gameType === 'connect4' || game.gameType === 'ludo') throw new GameError('Move hints are only available for Checkers and Chess.', 400);
   if (typeof playerId !== 'string' || !game.players.some((player) => player?.id === playerId)) {
     throw new GameError('You are not a player in this game.', 403);
   }
@@ -168,8 +188,12 @@ export async function joinGame(id: string, playerName: unknown): Promise<{ game:
     const second = { id: randomUUID(), name, side: 'black' as const };
     playerId = second.id;
     updated = { ...game, status: 'in_progress', players: [game.players[0], second], updatedAt: new Date().toISOString() };
-  } else {
+  } else if (game.gameType === 'chess') {
     const second = chessPlayer(name, 'black');
+    playerId = second.id;
+    updated = { ...game, status: 'in_progress', players: [game.players[0], second], updatedAt: new Date().toISOString() };
+  } else {
+    const second: LudoPlayer = { id: randomUUID(), name, side: 'blue' };
     playerId = second.id;
     updated = { ...game, status: 'in_progress', players: [game.players[0], second], updatedAt: new Date().toISOString() };
   }
@@ -239,12 +263,18 @@ export async function makeMove(id: string, playerId: unknown, move: unknown): Pr
     const validation = checkersEngine.validateMove(game, playerId, checkersMove);
     if (!validation.valid) throw validationError(validation.code);
     updated = applyCheckersMove(game, checkersMove);
-  } else {
+  } else if (game.gameType === 'chess') {
     const chessMove = move as ChessMove | null;
     if (!chessMove || typeof chessMove !== 'object') throw new GameError('Choose a valid player and move.');
     const validation = chessEngine.validateMove(game, playerId, chessMove);
     if (!validation.valid) throw validationError(validation.code);
     updated = applyChessMove(game, chessMove);
+  } else {
+    if (!isLudoAction(move)) throw new GameError('Roll the dice or choose a movable token.');
+    const ludoAction = move as LudoAction;
+    const validation = ludoEngine.validateMove(game, playerId, ludoAction);
+    if (!validation.valid) throw validationError(validation.code);
+    updated = applyLudoAction(game, ludoAction);
   }
   if (!updated) throw new GameError('That move is not legal.');
 
@@ -267,7 +297,7 @@ export async function makeMove(id: string, playerId: unknown, move: unknown): Pr
       if (checkersGame.currentTurn !== computer.side) break;
     }
     updated = checkersGame;
-  } else {
+  } else if (updated.gameType === 'chess') {
     let chessGame = updated;
     const computer = chessGame.players.find((candidate) => candidate?.isComputer && candidate.color === chessGame.currentTurn);
     if (computer && chessGame.status === 'in_progress') {
@@ -275,6 +305,19 @@ export async function makeMove(id: string, playerId: unknown, move: unknown): Pr
       if (chessMove) chessGame = applyChessMove(chessGame, chessMove) ?? chessGame;
     }
     updated = chessGame;
+  } else {
+    let ludoGame = updated;
+    for (let turn = 0; turn < 12 && ludoGame.status === 'in_progress'; turn += 1) {
+      const computer = ludoGame.players.find((candidate) => candidate?.isComputer && candidate.side === ludoGame.currentTurn);
+      if (!computer) break;
+      ludoGame = rollLudoDice(ludoGame) ?? ludoGame;
+      if (ludoGame.dice === null || ludoGame.currentTurn !== computer.side) break;
+      const token = chooseLudoToken(ludoGame, ludoGame.difficulty ?? 'medium');
+      if (token === null) break;
+      ludoGame = moveLudoToken(ludoGame, token) ?? ludoGame;
+      if (ludoGame.currentTurn !== computer.side) break;
+    }
+    updated = ludoGame;
   }
 
   await persist(updated, stored.revision);
@@ -295,8 +338,10 @@ export async function rematch(id: string, playerId: unknown): Promise<PlatformGa
     updated = { ...game, status: 'in_progress', board: createEmptyBoard(), currentTurn: 'red', winner: null, updatedAt: new Date().toISOString() };
   } else if (game.gameType === 'checkers') {
     updated = { ...game, status: 'in_progress', board: createCheckersBoard(), currentTurn: 'red', winner: null, forcedFrom: undefined, updatedAt: new Date().toISOString() };
-  } else {
+  } else if (game.gameType === 'chess') {
     updated = { ...game, ...newChessGameState(), gameType: 'chess', status: 'in_progress', updatedAt: new Date().toISOString() };
+  } else {
+    updated = { ...game, ...newLudoGameState(), status: 'in_progress', updatedAt: new Date().toISOString() };
   }
   await persist(updated, stored.revision);
   return updated;
