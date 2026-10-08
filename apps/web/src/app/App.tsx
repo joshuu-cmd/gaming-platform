@@ -89,7 +89,7 @@ function playMoveSound(kind: MoveSound): void {
       oscillator.type = kind === 'capture' || kind === 'loss' ? 'triangle' : 'sine';
       oscillator.frequency.setValueAtTime(frequency, noteStart);
       volume.gain.setValueAtTime(0.0001, noteStart);
-      volume.gain.exponentialRampToValueAtTime(kind === 'win' ? 0.055 : kind === 'loss' ? 0.045 : 0.035, noteStart + 0.012);
+      volume.gain.exponentialRampToValueAtTime(kind === 'win' ? 0.16 : kind === 'loss' ? 0.14 : 0.11, noteStart + 0.012);
       volume.gain.exponentialRampToValueAtTime(0.0001, noteStart + duration);
       oscillator.connect(volume);
       volume.connect(context.destination);
