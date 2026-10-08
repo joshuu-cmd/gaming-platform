@@ -59,6 +59,14 @@ export const gameRepository = {
     );
     if (result.rowCount !== 1) throw new ConcurrentGameUpdateError();
   },
+
+  async delete(id: string, expectedRevision: number): Promise<void> {
+    const result = await getPool().query(
+      'DELETE FROM games WHERE id = $1 AND revision = $2',
+      [id, expectedRevision],
+    );
+    if (result.rowCount !== 1) throw new ConcurrentGameUpdateError();
+  },
 };
 
 export async function closeGameRepository(): Promise<void> {

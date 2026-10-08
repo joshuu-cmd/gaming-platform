@@ -85,6 +85,28 @@ type LastMove = { gameId: string; from: number; to: number };
 type MoveSound = 'move' | 'capture' | 'roll' | 'win' | 'loss' | 'draw';
 type MatchResult = 'win' | 'loss' | 'draw';
 type BoardMoveHint = { from: number; to: number };
+type PendingChessMove = { gameId: string; from: number; to: number; promotion: ChessPiece['type'] };
+
+function previewChessMove(game: ChessGame, move: PendingChessMove): (ChessPiece | null)[] {
+  const board = [...game.board];
+  const piece = board[move.from];
+  if (!piece) return board;
+  board[move.from] = null;
+  if (piece.type === 'pawn' && move.to === game.enPassantTarget && !board[move.to]
+    && move.from % 8 !== move.to % 8) {
+    board[move.to + (piece.color === 'white' ? 8 : -8)] = null;
+  }
+  if (piece.type === 'king' && Math.abs((move.to % 8) - (move.from % 8)) === 2) {
+    const rookFrom = Math.floor(move.from / 8) * 8 + (move.to > move.from ? 7 : 0);
+    const rookTo = Math.floor(move.from / 8) * 8 + (move.to > move.from ? 5 : 3);
+    board[rookTo] = board[rookFrom];
+    board[rookFrom] = null;
+  }
+  board[move.to] = piece.type === 'pawn' && (Math.floor(move.to / 8) === 0 || Math.floor(move.to / 8) === 7)
+    ? { color: piece.color, type: move.promotion }
+    : piece;
+  return board;
+}
 
 function CrownIcon() {
   return <svg viewBox="0 0 24 20" aria-hidden="true" focusable="false">
@@ -125,7 +147,11 @@ function playMoveSound(kind: MoveSound): void {
       oscillator.type = kind === 'capture' || kind === 'loss' ? 'triangle' : 'sine';
       oscillator.frequency.setValueAtTime(frequency, noteStart);
       volume.gain.setValueAtTime(0.0001, noteStart);
-      volume.gain.exponentialRampToValueAtTime(kind === 'win' ? 0.16 : kind === 'loss' ? 0.14 : 0.11, noteStart + 0.012);
+      volume.gain.exponentialRampToValueAtTime(
+        kind === 'win' ? 0.28 : kind === 'loss' ? 0.26 : kind === 'draw' ? 0.25
+          : kind === 'capture' ? 0.42 : kind === 'roll' ? 0.36 : 0.34,
+        noteStart + 0.012,
+      );
       volume.gain.exponentialRampToValueAtTime(0.0001, noteStart + duration);
       oscillator.connect(volume);
       volume.connect(context.destination);
@@ -235,6 +261,8 @@ export default function App() {
   const [selectedSquare, setSelectedSquare] = useState<number | null>(null);
   const [legalTargets, setLegalTargets] = useState<number[]>([]);
   const [availableMoves, setAvailableMoves] = useState<BoardMoveHint[]>([]);
+  const [optimisticGame, setOptimisticGame] = useState<Game | null>(null);
+  const [pendingChessMove, setPendingChessMove] = useState<PendingChessMove | null>(null);
   const [promotionSquare, setPromotionSquare] = useState<number | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(() => window.localStorage.getItem('move-sounds') !== 'off');
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
@@ -381,6 +409,12 @@ export default function App() {
 
   async function dropDisc(column: number) {
     if (!game || game.gameType !== 'connect4' || !playerId || busy) return;
+    const landingIndex = Array.from({ length: 6 }, (_, row) => (5 - row) * 7 + column)
+      .find((index) => game.board[index] === null);
+    if (landingIndex === undefined) return;
+    const previewBoard = [...game.board];
+    previewBoard[landingIndex] = game.currentTurn;
+    setOptimisticGame({ ...game, board: previewBoard });
     prepareMoveAudio();
     setError('');
     setBusy(true);
@@ -394,7 +428,9 @@ export default function App() {
         await new Promise((resolve) => window.setTimeout(resolve, 750));
       }
       setGame(result.game);
+      setOptimisticGame(null);
     } catch (reason) {
+      setOptimisticGame(null);
       setError((reason as Error).message);
     } finally {
       setBusy(false);
@@ -422,6 +458,12 @@ export default function App() {
 
   async function moveLudoToken(token: number) {
     if (!game || game.gameType !== 'ludo' || !playerId || busy) return;
+    const currentProgress = game.tokens[game.currentTurn][token];
+    const progress = currentProgress === undefined ? undefined : currentProgress < 0 ? 0 : currentProgress + (game.dice ?? 0);
+    if (progress === undefined) return;
+    const tokens = { red: [...game.tokens.red], blue: [...game.tokens.blue] };
+    tokens[game.currentTurn][token] = progress;
+    setOptimisticGame({ ...game, tokens });
     setBusy(true);
     setError('');
     try {
@@ -430,7 +472,9 @@ export default function App() {
         body: JSON.stringify({ playerId, move: { action: 'move', token } }),
       });
       setGame(result.game);
+      setOptimisticGame(null);
     } catch (reason) {
+      setOptimisticGame(null);
       setError((reason as Error).message);
     } finally {
       setBusy(false);
@@ -456,6 +500,18 @@ export default function App() {
       return;
     }
     if (!legalTargets.includes(square)) return;
+    const from = selectedSquare;
+    const previewBoard = [...game.board];
+    const checker = previewBoard[from];
+    if (checker) {
+      previewBoard[from] = null;
+      if (Math.abs(square - from) > 9) previewBoard[(from + square) / 2] = null;
+      previewBoard[square] = {
+        ...checker,
+        king: checker.king || (checker.side === 'red' ? Math.floor(square / 8) === 0 : Math.floor(square / 8) === 7),
+      };
+      setOptimisticGame({ ...game, board: previewBoard });
+    }
     setError('');
     setBusy(true);
     try {
@@ -470,10 +526,12 @@ export default function App() {
         await new Promise((resolve) => window.setTimeout(resolve, 750));
       }
       setGame(result.game);
+      setOptimisticGame(null);
       setSelectedSquare(checkersResult?.forcedFrom ?? null);
       setAvailableMoves([]);
       setLegalTargets([]);
     } catch (reason) {
+      setOptimisticGame(null);
       setError((reason as Error).message);
     } finally {
       setBusy(false);
@@ -503,9 +561,11 @@ export default function App() {
 
   async function submitChessMove(square: number, promotion: 'queen' | 'rook' | 'bishop' | 'knight') {
     if (!game || game.gameType !== 'chess' || !playerId || selectedSquare === null) return;
+    const from = selectedSquare;
     const movingPiece = game.board[selectedSquare];
     const promotionMove = movingPiece?.type === 'pawn'
       && Math.floor(square / 8) === (movingPiece.color === 'white' ? 0 : 7);
+    setPendingChessMove({ gameId: game.id, from, to: square, promotion: promotionMove ? promotion : 'queen' });
     setError('');
     setBusy(true);
     try {
@@ -517,11 +577,13 @@ export default function App() {
         && result.game.status === 'finished' && result.game.winner === 'black';
       if (computerWon) await new Promise((resolve) => window.setTimeout(resolve, 750));
       setGame(result.game);
+      setPendingChessMove(null);
       setSelectedSquare(null);
       setAvailableMoves([]);
       setLegalTargets([]);
       setPromotionSquare(null);
     } catch (reason) {
+      setPendingChessMove(null);
       setError((reason as Error).message);
     } finally {
       setBusy(false);
@@ -584,18 +646,19 @@ export default function App() {
   async function leaveRoom() {
     const activeGame = game;
     const activePlayerId = playerId;
-    const shouldCloseOnlineRoom = Boolean(activeGame && activePlayerId && activeGame.status !== 'finished'
-      && !activeGame.players.some((player) => player?.isComputer));
+    const isComputerMatch = Boolean(activeGame?.players.some((player) => player?.isComputer));
+    const shouldCloseOnlineRoom = Boolean(activeGame && activePlayerId && activeGame.status !== 'finished' && !isComputerMatch);
+    const shouldDeleteComputerMatch = Boolean(activeGame && activePlayerId && isComputerMatch);
     let leaveError = '';
     let leaveNotice = '';
-    if (shouldCloseOnlineRoom && activeGame && activePlayerId) {
+    if ((shouldCloseOnlineRoom || shouldDeleteComputerMatch) && activeGame && activePlayerId) {
       setBusy(true);
       try {
         await request<{ game: Game }>(`/api/games/${encodeURIComponent(activeGame.id)}/leave`, {
           method: 'POST',
           body: JSON.stringify({ playerId: activePlayerId }),
         });
-        leaveNotice = 'Room closed. Your opponent has been notified.';
+        if (shouldCloseOnlineRoom) leaveNotice = 'Room closed. Your opponent has been notified.';
       } catch (reason) {
         leaveError = (reason as Error).message;
       } finally {
@@ -628,6 +691,10 @@ export default function App() {
   }
 
   const currentPlayer = game?.players.find((player) => player?.id === playerId) ?? null;
+  const renderedGame = game && optimisticGame?.id === game.id ? optimisticGame : game;
+  const visibleChessBoard = game?.gameType === 'chess' && pendingChessMove?.gameId === game.id
+    ? previewChessMove(game, pendingChessMove)
+    : null;
   const matchResult: MatchResult | null = game?.status !== 'finished' || game.closedBy
     ? null
     : !game.winner ? 'draw'
@@ -692,11 +759,11 @@ export default function App() {
                 ))}
               </div>
               <div className="board" role="grid" aria-label="Connect Four board">
-                {game.board.map((cell, index) => <div className={`board-slot ${lastMove?.gameId === game.id && lastMove.to === index ? 'last-destination' : ''}`} role="gridcell" key={index}><span className={`disc ${cell ?? 'empty'}`} /></div>)}
+                {(renderedGame?.gameType === 'connect4' ? renderedGame.board : game.board).map((cell, index) => <div className={`board-slot ${lastMove?.gameId === game.id && lastMove.to === index ? 'last-destination' : ''}`} role="gridcell" key={index}><span className={`disc ${cell ?? 'empty'}`} /></div>)}
               </div>
             </> : game.gameType === 'checkers' ? <>
             <div className="checkers-board" role="grid" aria-label="Checkers board">
-              {game.board.map((piece, index) => {
+              {(renderedGame?.gameType === 'checkers' ? renderedGame.board : game.board).map((piece, index) => {
                 const row = Math.floor(index / 8);
                 const column = index % 8;
                 const dark = (row + column) % 2 === 1;
@@ -710,7 +777,7 @@ export default function App() {
               })}
             </div>
             </> : game.gameType === 'ludo' ? <LudoBoard
-              game={game}
+              game={renderedGame?.gameType === 'ludo' ? renderedGame : game}
               playerColor={currentPlayer?.side === 'red' || currentPlayer?.side === 'blue' ? currentPlayer.side : undefined}
               busy={busy}
               onRoll={() => void rollLudoDice()}
@@ -721,7 +788,7 @@ export default function App() {
                 const index = currentPlayer?.color === 'black' ? 63 - displayIndex : displayIndex;
                 const row = Math.floor(index / 8);
                 const column = index % 8;
-                const piece = game.board[index];
+                const piece = visibleChessBoard ? visibleChessBoard[index] : game.board[index];
                 const isHint = legalTargets.includes(index);
                 const ownTurn = currentPlayer?.color === game.currentTurn;
                 const displayRow = Math.floor(displayIndex / 8);
@@ -813,30 +880,36 @@ export default function App() {
             </button>
           ))}
         </section>
-        <section className="lobby">
+        <section className="lobby" aria-label="Start or join a match">
+          <div className="lobby-card computer-card">
+            <div className="card-icon computer-icon">♟</div>
+            <p className="eyebrow">SOLO PLAY</p>
+            <h2>Play vs computer</h2>
+            <p className="card-copy">Choose a difficulty and take on the computer.</p>
+            <div className="lobby-fields">
+              <label htmlFor="computer-name">YOUR NAME</label>
+              <input id="computer-name" value={playerName} onChange={(event) => setPlayerName(event.target.value)} maxLength={24} />
+              <div className="difficulty-buttons">
+                {(['easy', 'medium', 'hard'] as const).map((difficulty) => (
+                  <button type="button" key={difficulty} className="secondary-button" disabled={busy} onClick={() => void createGame('computer', difficulty)}>
+                    {difficulty[0].toUpperCase() + difficulty.slice(1)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
           <div className="lobby-card create-card">
             <div className="card-icon sun-icon">✳</div>
-            <p className="eyebrow">SET UP A MATCH</p>
+            <p className="eyebrow">PLAY WITH SOMEONE</p>
             <h2>Choose your opponent</h2>
-            <p className="card-copy">Play someone you know or take on the computer.</p>
+            <p className="card-copy">Create a room and invite someone to play.</p>
             <form onSubmit={(event) => { event.preventDefault(); void createGame('player'); }}>
               <label htmlFor="create-name">YOUR NAME</label>
               <input id="create-name" value={playerName} onChange={(event) => setPlayerName(event.target.value)} maxLength={24} required />
               <button type="submit" className="primary-button" disabled={busy}>{busy ? 'Starting…' : 'Play a friend'} <span>→</span></button>
-              <div className="computer-levels">
-                <span className="computer-levels-label">PLAY VS COMPUTER</span>
-                <div className="difficulty-buttons">
-                  {(['easy', 'medium', 'hard'] as const).map((difficulty) => (
-                    <button type="button" key={difficulty} className="secondary-button" disabled={busy} onClick={() => void createGame('computer', difficulty)}>
-                      {difficulty[0].toUpperCase() + difficulty.slice(1)}
-                    </button>
-                  ))}
-                </div>
-              </div>
             </form>
           </div>
-
-          <div className="lobby-divider"><span>OR</span></div>
 
           <div className="lobby-card join-card">
             <div className="card-icon green-icon">↗</div>

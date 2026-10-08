@@ -210,7 +210,18 @@ export async function leaveGame(id: string, playerId: unknown): Promise<Platform
     const participant = game.players.find((candidate) => candidate?.id === playerId);
     if (!participant || participant.isComputer) throw new GameError('You are not a player in this room.', 403);
     if (game.players.some((candidate) => candidate?.isComputer)) {
-      throw new GameError('Leaving a computer match does not close an online room.', 409);
+      try {
+        await gameRepository.delete(game.id, stored.revision);
+        return game;
+      } catch (error) {
+        if (!(error instanceof ConcurrentGameUpdateError) || attempt === 2) {
+          if (error instanceof ConcurrentGameUpdateError) {
+            throw new GameError('The match changed while leaving. Please try again.', 409);
+          }
+          throw error;
+        }
+        continue;
+      }
     }
     if (game.closedBy || game.status === 'finished') return game;
 
