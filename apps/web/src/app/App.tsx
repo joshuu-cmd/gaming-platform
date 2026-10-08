@@ -85,6 +85,7 @@ type LastMove = { gameId: string; from: number; to: number };
 type MoveSound = 'move' | 'capture' | 'roll' | 'win' | 'loss' | 'draw';
 type MatchResult = 'win' | 'loss' | 'draw';
 type BoardMoveHint = { from: number; to: number };
+type StartingMatch = 'friend' | Difficulty | null;
 type PendingChessMove = { gameId: string; from: number; to: number; promotion: ChessPiece['type'] };
 
 function previewChessMove(game: ChessGame, move: PendingChessMove): (ChessPiece | null)[] {
@@ -258,6 +259,7 @@ export default function App() {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
+  const [startingMatch, setStartingMatch] = useState<StartingMatch>(null);
   const [selectedSquare, setSelectedSquare] = useState<number | null>(null);
   const [legalTargets, setLegalTargets] = useState<number[]>([]);
   const [availableMoves, setAvailableMoves] = useState<BoardMoveHint[]>([]);
@@ -354,6 +356,7 @@ export default function App() {
 
   async function createGame(opponent: 'player' | 'computer', difficulty?: Difficulty, gameType = selectedGame) {
     prepareMoveAudio();
+    setStartingMatch(opponent === 'computer' ? difficulty ?? 'medium' : 'friend');
     setBusy(true);
     setError('');
     try {
@@ -377,6 +380,7 @@ export default function App() {
     } catch (reason) {
       setError((reason as Error).message);
     } finally {
+      setStartingMatch(null);
       setBusy(false);
     }
   }
@@ -892,7 +896,7 @@ export default function App() {
               <div className="difficulty-buttons">
                 {(['easy', 'medium', 'hard'] as const).map((difficulty) => (
                   <button type="button" key={difficulty} className="secondary-button" disabled={busy} onClick={() => void createGame('computer', difficulty)}>
-                    {difficulty[0].toUpperCase() + difficulty.slice(1)}
+                    {startingMatch === difficulty ? 'Starting…' : difficulty[0].toUpperCase() + difficulty.slice(1)}
                   </button>
                 ))}
               </div>
@@ -907,7 +911,7 @@ export default function App() {
             <form onSubmit={(event) => { event.preventDefault(); void createGame('player'); }}>
               <label htmlFor="create-name">YOUR NAME</label>
               <input id="create-name" value={playerName} onChange={(event) => setPlayerName(event.target.value)} maxLength={24} required />
-              <button type="submit" className="primary-button" disabled={busy}>{busy ? 'Starting…' : 'Play a friend'} <span>→</span></button>
+              <button type="submit" className="primary-button" disabled={busy}>{startingMatch === 'friend' ? 'Starting…' : 'Play a friend'} <span>→</span></button>
             </form>
           </div>
 
