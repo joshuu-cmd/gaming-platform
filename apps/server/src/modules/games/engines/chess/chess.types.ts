@@ -15,6 +15,7 @@ export interface ChessMove {
 
 export interface ChessPlayer {
   id: string;
+  userId?: string;
   name: string;
   color: ChessColor;
   isComputer?: boolean;

@@ -4,6 +4,7 @@ export type LudoStatus = 'waiting' | 'in_progress' | 'finished';
 
 export interface LudoPlayer {
   id: string;
+  userId?: string;
   name: string;
   side: LudoColor;
   isComputer?: boolean;

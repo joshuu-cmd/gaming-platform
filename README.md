@@ -329,7 +329,7 @@ AV
 
 # 8. Getting Started
 
-The current playable prototype includes free Connect Four, Checkers, and Chess. All three support friend rooms, rematches, and a computer opponent with Easy, Medium, or Hard difficulty; rematches keep the selected difficulty. Checkers has optional captures, multi-jumps, kings, and legal-move hints. Chess supports checkmate, castling, en passant, selectable queen/rook/bishop/knight promotion, and claimable and automatic draw conditions. The prototype is intended for local development and does not include accounts or payment functionality. Game state is stored in PostgreSQL and survives API restarts.
+The current playable prototype includes free Connect Four, Checkers, and Chess. All three support friend rooms, rematches, and a computer opponent with Easy, Medium, or Hard difficulty; rematches keep the selected difficulty. Checkers has optional captures, multi-jumps, kings, and legal-move hints. Chess supports checkmate, castling, en passant, selectable queen/rook/bishop/knight promotion, and claimable and automatic draw conditions. The prototype is intended for local development and does not include payment functionality. Game state is stored in PostgreSQL and survives API restarts.
 
 Requirements: Node.js 20.19.3 or newer and npm.
 
@@ -342,5 +342,13 @@ npm run dev
 ```
 
 Open the web app at `http://localhost:5173`. The API runs at `http://localhost:3001`, with a health endpoint at `/api/health`. Choose **Play vs computer** for a solo game, or create a friend room and share its invite link with another browser.
+
+## Accounts
+
+Run `npm run db:migrate` after pulling account changes. New games and new rooms require an account. Existing guest games stored before account support remain accessible through their existing links.
+
+Account creation asks for a display name, email, phone number in international format (for example `+2547…`), and a password of at least 6 characters. No verification codes are required; users are signed in after signup and can later sign in with their email or phone and password. Email addresses and phone numbers are unique. Passwords are hashed, and browser sessions use an HTTP-only cookie.
+
+Password reset codes can be delivered by [Resend](https://resend.com/docs/api-reference/emails/send-email). Configure `AUTH_CHALLENGE_SECRET` (at least 32 random characters), `RESEND_API_KEY`, and `AUTH_EMAIL_FROM` to enable email resets; these settings are optional for signup and login.
 
 Choose Connect Four, Checkers, or Chess from the game picker. The game server uses the shared engine contract in `packages/game-engines/index.ts`. Each game engine provides current-player lookup, move validation, move application, and completion checks. PostgreSQL stores the game type, current game snapshot, and a revision number; revision checks reject conflicting simultaneous moves. `npm run db:migrate` applies every numbered SQL migration in `database/migrations`.

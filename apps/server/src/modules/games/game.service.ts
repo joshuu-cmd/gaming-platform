@@ -45,6 +45,23 @@ async function requireGame(id: string) {
   return stored;
 }
 
+function resolvePlayerId(game: PlatformGame, accountId?: string, suppliedId?: unknown): string | null {
+  if (accountId) {
+    const accountPlayer = game.players.find((player) => player?.userId === accountId);
+    if (accountPlayer) return accountPlayer.id;
+    if (game.players.some((player) => Boolean(player?.userId))) return null;
+  }
+  if (typeof suppliedId !== 'string') return null;
+  const legacyPlayer = game.players.find((player) => player?.id === suppliedId && !player.userId && !player.isComputer);
+  return legacyPlayer?.id ?? null;
+}
+
+function requirePlayerId(game: PlatformGame, accountId?: string, suppliedId?: unknown): string {
+  const playerId = resolvePlayerId(game, accountId, suppliedId);
+  if (!playerId) throw new GameError(accountId ? 'You are not a player in this game.' : 'Sign in to continue.', accountId ? 403 : 401);
+  return playerId;
+}
+
 async function persist(game: PlatformGame, expectedRevision: number): Promise<void> {
   try {
     await gameRepository.update(game, expectedRevision);
@@ -63,19 +80,21 @@ export async function createGame(
   opponent: unknown = 'player',
   requestedDifficulty: unknown = 'medium',
   requestedGameType: unknown = 'connect4',
+  account?: { id: string; displayName: string },
 ): Promise<{ game: PlatformGame; playerId: string }> {
+  if (!account) throw new GameError('Sign in to start a new game.', 401);
   if (opponent !== 'player' && opponent !== 'computer') throw new GameError('Choose a player or computer opponent.');
   const gameType = cleanGameType(requestedGameType);
   const versusComputer = opponent === 'computer';
   const difficulty = versusComputer ? cleanDifficulty(requestedDifficulty) : undefined;
-  const firstName = cleanName(playerName);
+  const firstName = cleanName(account.displayName || playerName);
   const now = new Date().toISOString();
   const id = randomUUID();
 
-  if (gameType === 'chess') return createChessGame(firstName, opponent, requestedDifficulty);
+  if (gameType === 'chess') return createChessGame(firstName, opponent, requestedDifficulty, account.id);
 
   if (gameType === 'ludo') {
-    const first: LudoPlayer = { id: randomUUID(), name: firstName, side: 'red' };
+    const first: LudoPlayer = { id: randomUUID(), userId: account.id, name: firstName, side: 'red' };
     const second: LudoPlayer | null = versusComputer ? { id: randomUUID(), name: 'Computer', side: 'blue', isComputer: true } : null;
     const game: LudoGame = {
       ...newLudoGameState(),
@@ -92,7 +111,7 @@ export async function createGame(
   }
 
   if (gameType === 'connect4') {
-    const first = { ...player(firstName, 'red'), disc: 'red' as const };
+    const first = { ...player(firstName, 'red'), userId: account.id, disc: 'red' as const };
     const second = versusComputer ? { ...player('Computer', 'yellow'), disc: 'yellow' as const, isComputer: true } : null;
     const game: ConnectFourGame = {
       gameType, id, status: versusComputer ? 'in_progress' : 'waiting',
@@ -104,7 +123,7 @@ export async function createGame(
     return { game, playerId: first.id };
   }
 
-  const first = { id: randomUUID(), name: firstName, side: 'red' as const };
+  const first = { id: randomUUID(), userId: account.id, name: firstName, side: 'red' as const };
   const second = versusComputer ? { id: randomUUID(), name: 'Computer', side: 'black' as const, isComputer: true } : null;
   const game: CheckersGame = {
     gameType, id, status: versusComputer ? 'in_progress' : 'waiting',
@@ -116,13 +135,13 @@ export async function createGame(
   return { game, playerId: first.id };
 }
 
-function chessPlayer(name: string, color: 'white' | 'black', isComputer = false): ChessPlayer {
-  return { id: randomUUID(), name, color, ...(isComputer ? { isComputer: true } : {}) };
+function chessPlayer(name: string, color: 'white' | 'black', isComputer = false, userId?: string): ChessPlayer {
+  return { id: randomUUID(), ...(userId ? { userId } : {}), name, color, ...(isComputer ? { isComputer: true } : {}) };
 }
 
-export async function createChessGame(playerName: unknown, opponent: 'player' | 'computer', difficulty: unknown): Promise<{ game: ChessGame; playerId: string }> {
+export async function createChessGame(playerName: unknown, opponent: 'player' | 'computer', difficulty: unknown, userId: string): Promise<{ game: ChessGame; playerId: string }> {
   const state = newChessGameState();
-  const first = chessPlayer(cleanName(playerName), 'white');
+  const first = chessPlayer(cleanName(playerName), 'white', false, userId);
   const versusComputer = opponent === 'computer';
   const second = versusComputer ? chessPlayer('Computer', 'black', true) : null;
   const game: ChessGame = {
@@ -142,12 +161,10 @@ export async function getGame(id: string): Promise<PlatformGame> {
   return (await requireGame(id)).game;
 }
 
-export async function getBoardLegalMoves(id: string, playerId: unknown): Promise<(CheckersMove | ChessMove)[]> {
+export async function getBoardLegalMoves(id: string, suppliedPlayerId: unknown, accountId?: string): Promise<(CheckersMove | ChessMove)[]> {
   const { game } = await requireGame(id);
   if (game.gameType === 'connect4' || game.gameType === 'ludo') throw new GameError('Move hints are only available for Checkers and Chess.', 400);
-  if (typeof playerId !== 'string' || !game.players.some((player) => player?.id === playerId)) {
-    throw new GameError('You are not a player in this game.', 403);
-  }
+  const playerId = requirePlayerId(game, accountId, suppliedPlayerId);
   if (game.gameType === 'checkers') {
     if (checkersEngine.getCurrentPlayerId(game) !== playerId) throw new GameError('Wait for your turn.', 409);
     return legalMoves(game);
@@ -156,13 +173,11 @@ export async function getBoardLegalMoves(id: string, playerId: unknown): Promise
   return legalChessMoves(game);
 }
 
-export async function claimChessDraw(id: string, playerId: unknown): Promise<ChessGame> {
+export async function claimChessDraw(id: string, suppliedPlayerId: unknown, accountId?: string): Promise<ChessGame> {
   const stored = await requireGame(id);
   const game = stored.game;
   if (game.gameType !== 'chess') throw new GameError('Draw claims are only available in Chess.', 400);
-  if (typeof playerId !== 'string' || !game.players.some((player) => player?.id === playerId)) {
-    throw new GameError('You are not a player in this game.', 403);
-  }
+  const playerId = requirePlayerId(game, accountId, suppliedPlayerId);
   if (game.status !== 'in_progress' || chessEngine.getCurrentPlayerId(game) !== playerId) {
     throw new GameError('Only the player to move can claim a draw.', 409);
   }
@@ -173,27 +188,30 @@ export async function claimChessDraw(id: string, playerId: unknown): Promise<Che
   return updated;
 }
 
-export async function joinGame(id: string, playerName: unknown): Promise<{ game: PlatformGame; playerId: string }> {
+export async function joinGame(id: string, playerName: unknown, account?: { id: string; displayName: string }): Promise<{ game: PlatformGame; playerId: string }> {
   const stored = await requireGame(id);
   const game = stored.game;
   if (game.status !== 'waiting' || game.players[1]) throw new GameError('This game already has two players.', 409);
-  const name = cleanName(playerName);
+  const accountGame = game.players.some((player) => Boolean(player?.userId));
+  if (accountGame && !account) throw new GameError('Sign in to join this game.', 401);
+  const joinedUserId = accountGame ? account?.id : undefined;
+  const name = cleanName(account?.displayName ?? playerName);
   let updated: PlatformGame;
   let playerId: string;
   if (game.gameType === 'connect4') {
-    const second = { id: randomUUID(), name, disc: 'yellow' as const };
+    const second = { id: randomUUID(), ...(joinedUserId ? { userId: joinedUserId } : {}), name, disc: 'yellow' as const };
     playerId = second.id;
     updated = { ...game, status: 'in_progress', players: [game.players[0], second], updatedAt: new Date().toISOString() };
   } else if (game.gameType === 'checkers') {
-    const second = { id: randomUUID(), name, side: 'black' as const };
+    const second = { id: randomUUID(), ...(joinedUserId ? { userId: joinedUserId } : {}), name, side: 'black' as const };
     playerId = second.id;
     updated = { ...game, status: 'in_progress', players: [game.players[0], second], updatedAt: new Date().toISOString() };
   } else if (game.gameType === 'chess') {
-    const second = chessPlayer(name, 'black');
+    const second = chessPlayer(name, 'black', false, joinedUserId);
     playerId = second.id;
     updated = { ...game, status: 'in_progress', players: [game.players[0], second], updatedAt: new Date().toISOString() };
   } else {
-    const second: LudoPlayer = { id: randomUUID(), name, side: 'blue' };
+    const second: LudoPlayer = { id: randomUUID(), ...(joinedUserId ? { userId: joinedUserId } : {}), name, side: 'blue' };
     playerId = second.id;
     updated = { ...game, status: 'in_progress', players: [game.players[0], second], updatedAt: new Date().toISOString() };
   }
@@ -201,12 +219,11 @@ export async function joinGame(id: string, playerName: unknown): Promise<{ game:
   return { game: updated, playerId };
 }
 
-export async function leaveGame(id: string, playerId: unknown): Promise<PlatformGame> {
-  if (typeof playerId !== 'string') throw new GameError('Choose a valid player to leave the room.', 400);
-
+export async function leaveGame(id: string, suppliedPlayerId: unknown, accountId?: string): Promise<PlatformGame> {
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const stored = await requireGame(id);
     const game = stored.game;
+    const playerId = requirePlayerId(game, accountId, suppliedPlayerId);
     const participant = game.players.find((candidate) => candidate?.id === playerId);
     if (!participant || participant.isComputer) throw new GameError('You are not a player in this room.', 403);
     if (game.players.some((candidate) => candidate?.isComputer)) {
@@ -256,10 +273,10 @@ function validationError(code: string): GameError {
   }
 }
 
-export async function makeMove(id: string, playerId: unknown, move: unknown): Promise<PlatformGame> {
+export async function makeMove(id: string, suppliedPlayerId: unknown, move: unknown, accountId?: string): Promise<PlatformGame> {
   const stored = await requireGame(id);
   const game = stored.game;
-  if (typeof playerId !== 'string') throw new GameError('Choose a valid player and move.');
+  const playerId = requirePlayerId(game, accountId, suppliedPlayerId);
 
   let updated: PlatformGame | null;
   if (game.gameType === 'connect4') {
@@ -335,9 +352,10 @@ export async function makeMove(id: string, playerId: unknown, move: unknown): Pr
   return updated;
 }
 
-export async function rematch(id: string, playerId: unknown): Promise<PlatformGame> {
+export async function rematch(id: string, suppliedPlayerId: unknown, accountId?: string): Promise<PlatformGame> {
   const stored = await requireGame(id);
   const game = stored.game;
+  const playerId = requirePlayerId(game, accountId, suppliedPlayerId);
   const participant = game.players.find((candidate) => candidate?.id === playerId);
   if (!participant || participant.isComputer) throw new GameError('You are not a player in this game.', 403);
   if (game.closedBy) throw new GameError('This room was closed because a player left.', 409);

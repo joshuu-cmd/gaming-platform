@@ -6,7 +6,8 @@ import './app.css';
 type Difficulty = 'easy' | 'medium' | 'hard';
 type Disc = 'red' | 'yellow';
 type RoomClosure = { playerId: string; playerName: string };
-type Player = { id: string; name: string; disc?: Disc; side?: 'red' | 'black' | 'blue'; color?: 'white' | 'black'; isComputer?: boolean };
+type Player = { id: string; userId?: string; name: string; disc?: Disc; side?: 'red' | 'black' | 'blue'; color?: 'white' | 'black'; isComputer?: boolean };
+type AccountUser = { id: string; email: string; phoneE164: string; displayName: string; emailVerified: boolean; phoneVerified: boolean };
 type GameStatus = 'waiting' | 'in_progress' | 'finished';
 type ConnectFourGame = {
   gameType: 'connect4';
@@ -227,6 +228,8 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
     } catch {
       throw new Error(`The server returned an invalid response (HTTP ${response.status}).`);
     }
+  } else if (response.status === 204) {
+    return undefined as T;
   } else if (response.ok) {
     throw new Error('The server returned an empty response. Please try again.');
   }
@@ -260,6 +263,15 @@ export default function App() {
   const [notice, setNotice] = useState('');
   const [busy, setBusy] = useState(false);
   const [startingMatch, setStartingMatch] = useState<StartingMatch>(null);
+  const [account, setAccount] = useState<AccountUser | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const [authMode, setAuthMode] = useState<'register' | 'login' | 'forgot' | 'reset'>('register');
+  const [authEmail, setAuthEmail] = useState('');
+  const [authPhone, setAuthPhone] = useState('');
+  const [authDisplayName, setAuthDisplayName] = useState('');
+  const [authPassword, setAuthPassword] = useState('');
+  const [resetCode, setResetCode] = useState('');
+  const [newPassword, setNewPassword] = useState('');
   const [selectedSquare, setSelectedSquare] = useState<number | null>(null);
   const [legalTargets, setLegalTargets] = useState<number[]>([]);
   const [availableMoves, setAvailableMoves] = useState<BoardMoveHint[]>([]);
@@ -312,6 +324,37 @@ export default function App() {
   }, [game, playerId, soundEnabled]);
 
   useEffect(() => {
+    if (!game || !account) return;
+    const accountPlayer = game.players.find((player) => player?.userId === account.id);
+    if (!accountPlayer) return;
+    setPlayerId(accountPlayer.id);
+    window.sessionStorage.setItem(`player:${game.id}`, accountPlayer.id);
+  }, [account, game]);
+
+  useEffect(() => {
+    const pending = window.sessionStorage.getItem('pending-account-verification');
+    if (pending) {
+      try {
+        const details = JSON.parse(pending) as { email: string; phone: string };
+        setAuthEmail(details.email);
+        setAuthPhone(details.phone);
+      } catch {
+        window.sessionStorage.removeItem('pending-account-verification');
+      }
+    }
+    request<{ user: AccountUser | null }>('/api/auth/me')
+      .then(({ user }) => {
+        setAccount(user);
+        if (user) {
+          setPlayerName(user.displayName);
+          setAuthEmail(user.email);
+        }
+      })
+      .catch(() => undefined)
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  useEffect(() => {
     const id = new URLSearchParams(window.location.search).get('game');
     if (!id) return;
     request<{ game: Game }>(`/api/games/${encodeURIComponent(id)}`)
@@ -353,6 +396,99 @@ export default function App() {
     if (selectedSquare === null) return;
     setLegalTargets(availableMoves.filter((move) => move.from === selectedSquare).map((move) => move.to));
   }, [availableMoves, selectedSquare]);
+
+  async function registerAccount(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const result = await request<{ user: AccountUser }>('/api/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ email: authEmail, phone: authPhone, displayName: authDisplayName, password: authPassword }),
+      });
+      window.sessionStorage.removeItem('pending-account-verification');
+      setAccount(result.user);
+      setPlayerName(result.user.displayName);
+      setNotice('Your account is ready. You are signed in.');
+    } catch (reason) {
+      const message = (reason as Error).message;
+      if (message.toLowerCase().includes('already registered')) setAuthMode('login');
+      setError(message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signIn(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      const result = await request<{ user: AccountUser }>('/api/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ identifier: authEmail, password: authPassword }),
+      });
+      setAccount(result.user);
+      setPlayerName(result.user.displayName);
+      setNotice('Welcome back.');
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function requestPasswordReset(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await sendPasswordResetCode();
+  }
+
+  async function sendPasswordResetCode() {
+    setBusy(true);
+    setError('');
+    try {
+      await request('/api/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email: authEmail }) });
+      setAuthMode('reset');
+      setNotice('If that account exists, a password reset code has been sent to its email.');
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resetAccountPassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setBusy(true);
+    setError('');
+    try {
+      await request('/api/auth/reset-password', { method: 'POST', body: JSON.stringify({ email: authEmail, code: resetCode, password: newPassword }) });
+      setAuthMode('login');
+      setAuthPassword('');
+      setNewPassword('');
+      setResetCode('');
+      setNotice('Password changed. Sign in with your new password.');
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function signOut() {
+    setBusy(true);
+    try {
+      await request('/api/auth/logout', { method: 'POST' });
+      setAccount(null);
+      window.sessionStorage.removeItem('pending-account-verification');
+      setAuthMode('login');
+      setNotice('You have signed out.');
+    } catch (reason) {
+      setError((reason as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
 
   async function createGame(opponent: 'player' | 'computer', difficulty?: Difficulty, gameType = selectedGame) {
     prepareMoveAudio();
@@ -696,6 +832,7 @@ export default function App() {
 
   const currentPlayer = game?.players.find((player) => player?.id === playerId) ?? null;
   const renderedGame = game && optimisticGame?.id === game.id ? optimisticGame : game;
+  const showAuthScreen = authLoading || (!account && !(game && game.players.every((player) => !player?.userId)));
   const selectedGameName = selectedGame === 'checkers' ? 'Checkers'
     : selectedGame === 'chess' ? 'Chess'
       : selectedGame === 'ludo' ? 'Ludo' : 'Connect Four';
@@ -729,7 +866,10 @@ export default function App() {
           <span className="brand-mark"><img src="/m-s-logo.jpg" alt="" /></span>
           <span>GAMING PLATFORM</span>
         </a>
-        <span className="prototype-tag"><span /> FREE PLAY · {game ? gameName : 'FOUR GAMES'}</span>
+        <div className="topbar-actions">
+          <span className="prototype-tag"><span /> FREE PLAY · {game ? gameName : 'FOUR GAMES'}</span>
+          {account && <button className="account-button" onClick={() => void signOut()} disabled={busy}>{account.displayName} · Sign out</button>}
+        </div>
       </header>
 
       <section className="hero">
@@ -741,7 +881,66 @@ export default function App() {
       {error && <div className="feedback error" role="alert">{error}</div>}
       {notice && <div className="feedback notice" role="status">{notice}</div>}
 
-      {game ? (
+      {showAuthScreen ? authLoading ? (
+        <section className="auth-card"><p className="eyebrow">ACCOUNT</p><h2>Checking your account…</h2></section>
+      ) : (
+        <section className="auth-card" aria-label="Account access">
+          <p className="eyebrow">FREE PLAY · PLAYER ACCOUNT</p>
+          {(authMode === 'register' || authMode === 'login') && <div className="auth-tabs" role="tablist" aria-label="Account action">
+            <button role="tab" aria-selected={authMode === 'register'} className={authMode === 'register' ? 'active' : ''} onClick={() => setAuthMode('register')}>Create account</button>
+            <button role="tab" aria-selected={authMode === 'login'} className={authMode === 'login' ? 'active' : ''} onClick={() => setAuthMode('login')}>Sign in</button>
+          </div>}
+          {authMode === 'register' && <>
+            <h2>Create your account</h2>
+            <p className="card-copy">Create an account and start playing. Use your email and password to sign in again.</p>
+            <form onSubmit={(event) => void registerAccount(event)}>
+              <label htmlFor="account-name">DISPLAY NAME</label>
+              <input id="account-name" value={authDisplayName} onChange={(event) => setAuthDisplayName(event.target.value)} maxLength={24} required />
+              <label htmlFor="account-email">EMAIL</label>
+              <input id="account-email" type="email" autoComplete="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} required />
+              <label htmlFor="account-phone">PHONE NUMBER</label>
+              <input id="account-phone" type="tel" autoComplete="tel" placeholder="+2547…" value={authPhone} onChange={(event) => setAuthPhone(event.target.value)} required />
+              <label htmlFor="account-password">PASSWORD · 6 CHARACTERS MINIMUM</label>
+              <input id="account-password" type="password" autoComplete="new-password" minLength={6} maxLength={128} value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} required />
+              <button className="primary-button" disabled={busy}>{busy ? 'Creating account…' : 'Create account'} <span>→</span></button>
+            </form>
+          </>}
+          {authMode === 'login' && <>
+            <h2>Sign in</h2>
+            <p className="card-copy">Sign in to create a match or join an account-based room.</p>
+            <form onSubmit={(event) => void signIn(event)}>
+              <label htmlFor="signin-email">EMAIL OR PHONE</label>
+              <input id="signin-email" type="text" autoComplete="username" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} required />
+              <label htmlFor="signin-password">PASSWORD</label>
+              <input id="signin-password" type="password" autoComplete="current-password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} required />
+              <button className="primary-button" disabled={busy}>{busy ? 'Signing in…' : 'Sign in'} <span>→</span></button>
+            </form>
+            <button className="auth-secondary-action" disabled={busy} onClick={() => setAuthMode('forgot')}>Forgot password?</button>
+          </>}
+          {authMode === 'forgot' && <>
+            <h2>Reset your password</h2>
+            <p className="card-copy">We’ll send a reset code to the email on your account.</p>
+            <form onSubmit={(event) => void requestPasswordReset(event)}>
+              <label htmlFor="reset-email">EMAIL</label>
+              <input id="reset-email" type="email" autoComplete="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} required />
+              <button className="primary-button" disabled={busy}>{busy ? 'Sending…' : 'Send reset code'} <span>→</span></button>
+            </form>
+            <button className="auth-secondary-action" onClick={() => setAuthMode('login')}>Back to sign in</button>
+          </>}
+          {authMode === 'reset' && <>
+            <h2>Choose a new password</h2>
+            <p className="card-copy">Enter the code sent to {authEmail} and choose a new password.</p>
+            <form onSubmit={(event) => void resetAccountPassword(event)}>
+              <label htmlFor="reset-code">RESET CODE</label>
+              <input id="reset-code" inputMode="numeric" autoComplete="one-time-code" maxLength={6} value={resetCode} onChange={(event) => setResetCode(event.target.value.replace(/\D/g, ''))} required />
+              <label htmlFor="new-password">NEW PASSWORD · 6 CHARACTERS MINIMUM</label>
+              <input id="new-password" type="password" autoComplete="new-password" minLength={6} maxLength={128} value={newPassword} onChange={(event) => setNewPassword(event.target.value)} required />
+              <button className="primary-button" disabled={busy}>{busy ? 'Updating…' : 'Update password'} <span>→</span></button>
+            </form>
+            <button className="auth-secondary-action" disabled={busy} onClick={() => void sendPasswordResetCode()}>Send another code</button>
+          </>}
+        </section>
+      ) : game ? (
         <section className="game-layout">
           <div className="game-panel">
             <div className="game-heading">

@@ -5,6 +5,7 @@ export type ComputerDifficulty = 'easy' | 'medium' | 'hard';
 
 export interface GamePlayer {
   id: string;
+  userId?: string;
   name: string;
   disc: Disc;
   isComputer?: boolean;

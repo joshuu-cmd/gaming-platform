@@ -11,6 +11,7 @@ export type CheckersCell = CheckersPiece | null;
 
 export interface CheckersPlayer {
   id: string;
+  userId?: string;
   name: string;
   side: CheckersSide;
   isComputer?: boolean;
