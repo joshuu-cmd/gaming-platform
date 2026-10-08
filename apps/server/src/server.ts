@@ -1,6 +1,6 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { app } from './app.js';
+import app  from './app.js';
 import { closeGameRepository, gameRepository } from './modules/games/game.repository.js';
 
 const envPath = fileURLToPath(new URL('../../../.env', import.meta.url));

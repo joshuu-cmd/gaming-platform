@@ -2,7 +2,8 @@ import express from 'express';
 import { GameError } from './modules/games/game.service.js';
 import { routes } from './routes/index.js';
 
-export const app = express();
+const  app = express();
+export default app;
 
 app.use(express.json({ limit: '10kb' }));
 app.use('/api', routes);
