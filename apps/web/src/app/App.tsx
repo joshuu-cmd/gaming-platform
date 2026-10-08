@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import './app.css';
 
 type Difficulty = 'easy' | 'medium' | 'hard';
@@ -45,6 +45,83 @@ const chessGlyphs = {
   white: { king: '♔', queen: '♕', rook: '♖', bishop: '♗', knight: '♘', pawn: '♙' },
   black: { king: '♚', queen: '♛', rook: '♜', bishop: '♝', knight: '♞', pawn: '♟' },
 } as const;
+
+type LastMove = { gameId: string; from: number; to: number };
+type MoveSound = 'move' | 'capture' | 'finish';
+
+let moveAudioContext: AudioContext | null = null;
+let moveAudioUnlocked = false;
+
+function prepareMoveAudio(): void {
+  try {
+    moveAudioContext ??= new window.AudioContext();
+    moveAudioUnlocked = true;
+    if (moveAudioContext.state === 'suspended') void moveAudioContext.resume().catch(() => undefined);
+  } catch {
+    // Sound is optional; unsupported browsers can still play normally.
+  }
+}
+
+function playMoveSound(kind: MoveSound): void {
+  try {
+    prepareMoveAudio();
+    const context = moveAudioContext;
+    if (!context) return;
+    const notes = kind === 'capture' ? [235, 175] : kind === 'finish' ? [392, 494, 587] : [360];
+    const start = context.currentTime;
+    notes.forEach((frequency, index) => {
+      const oscillator = context.createOscillator();
+      const volume = context.createGain();
+      const noteStart = start + index * 0.075;
+      const duration = kind === 'finish' ? 0.18 : 0.12;
+      oscillator.type = kind === 'capture' ? 'triangle' : 'sine';
+      oscillator.frequency.setValueAtTime(frequency, noteStart);
+      volume.gain.setValueAtTime(0.0001, noteStart);
+      volume.gain.exponentialRampToValueAtTime(kind === 'finish' ? 0.055 : 0.035, noteStart + 0.012);
+      volume.gain.exponentialRampToValueAtTime(0.0001, noteStart + duration);
+      oscillator.connect(volume);
+      volume.connect(context.destination);
+      oscillator.start(noteStart);
+      oscillator.stop(noteStart + duration);
+    });
+  } catch {
+    // Sound is optional; unsupported browsers can still play normally.
+  }
+}
+
+function inferLastMove(previous: Game, current: Game): LastMove | null {
+  if (previous.id !== current.id || previous.gameType !== current.gameType) return null;
+  if (current.gameType === 'connect4' && previous.gameType === 'connect4') {
+    const to = current.board.findIndex((piece, index) => !previous.board[index] && Boolean(piece));
+    return to < 0 ? null : { gameId: current.id, from: to, to };
+  }
+
+  if (current.gameType === 'checkers' && previous.gameType === 'checkers') {
+    const changedTo = current.board
+      .map((piece, index) => ({ piece, index, before: previous.board[index] }))
+      .filter(({ piece, before }) => piece && JSON.stringify(piece) !== JSON.stringify(before));
+    const destination = changedTo.find(({ piece }) => piece?.king) ?? changedTo[0];
+    if (!destination?.piece) return null;
+    const source = previous.board.findIndex((piece, index) => piece?.side === destination.piece?.side && !current.board[index]);
+    return source < 0 ? null : { gameId: current.id, from: source, to: destination.index };
+  }
+
+  if (current.gameType === 'chess' && previous.gameType === 'chess') {
+    const changedTo = current.board
+      .map((piece, index) => ({ piece, index, before: previous.board[index] }))
+      .filter(({ piece, before }) => piece && JSON.stringify(piece) !== JSON.stringify(before));
+    const destination = changedTo.find(({ piece }) => piece?.type === 'king') ?? changedTo[0];
+    if (!destination?.piece) return null;
+    const sourceCandidates = previous.board
+      .map((piece, index) => ({ piece, index }))
+      .filter(({ piece, index }) => piece?.color === destination.piece?.color && !current.board[index]);
+    const source = (sourceCandidates.find(({ piece }) => piece?.type === destination.piece?.type)
+      ?? sourceCandidates.find(({ piece }) => piece?.type === 'pawn')
+      ?? sourceCandidates[0])?.index ?? -1;
+    return source < 0 ? null : { gameId: current.id, from: source, to: destination.index };
+  }
+  return null;
+}
 
 function playerSide(player: Player | null | undefined): string | undefined {
   return player?.disc ?? player?.side ?? player?.color;
@@ -99,6 +176,37 @@ export default function App() {
   const [selectedSquare, setSelectedSquare] = useState<number | null>(null);
   const [legalTargets, setLegalTargets] = useState<number[]>([]);
   const [promotionSquare, setPromotionSquare] = useState<number | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState(() => window.localStorage.getItem('move-sounds') !== 'off');
+  const [lastMove, setLastMove] = useState<LastMove | null>(null);
+  const previousGameRef = useRef<Game | null>(null);
+
+  useEffect(() => {
+    if (!game) {
+      previousGameRef.current = null;
+      setLastMove(null);
+      return;
+    }
+    const previous = previousGameRef.current;
+    if (previous?.id !== game.id) {
+      setLastMove(null);
+    } else if (previous) {
+      const move = inferLastMove(previous, game);
+      if (move) {
+        setLastMove(move);
+        if (soundEnabled) {
+          const previousPieceCount = previous.board.filter(Boolean).length;
+          const currentPieceCount = game.board.filter(Boolean).length;
+          const sound: MoveSound = game.status === 'finished'
+            ? 'finish'
+            : currentPieceCount < previousPieceCount ? 'capture' : 'move';
+          playMoveSound(sound);
+        }
+      } else if (previous.status !== 'finished' && game.status === 'finished' && soundEnabled) {
+        playMoveSound('finish');
+      }
+    }
+    previousGameRef.current = game;
+  }, [game, soundEnabled]);
 
   useEffect(() => {
     const id = new URLSearchParams(window.location.search).get('game');
@@ -119,6 +227,7 @@ export default function App() {
   }, [game?.id, busy]);
 
   async function createGame(opponent: 'player' | 'computer', difficulty?: Difficulty, gameType = selectedGame) {
+    prepareMoveAudio();
     setBusy(true);
     setError('');
     try {
@@ -146,6 +255,7 @@ export default function App() {
 
   async function joinGame(event?: FormEvent<HTMLFormElement>) {
     event?.preventDefault();
+    prepareMoveAudio();
     setBusy(true);
     setError('');
     try {
@@ -170,6 +280,7 @@ export default function App() {
 
   async function dropDisc(column: number) {
     if (!game || game.gameType !== 'connect4' || !playerId || busy) return;
+    prepareMoveAudio();
     setError('');
     setBusy(true);
     try {
@@ -205,6 +316,7 @@ export default function App() {
 
   async function moveChecker(square: number) {
     if (!game || game.gameType !== 'checkers' || !playerId || game.status !== 'in_progress' || busy) return;
+    prepareMoveAudio();
     const piece = game.board[square];
     const ownSide = playerSide(game.players.find((candidate) => candidate?.id === playerId));
     if (selectedSquare === null) {
@@ -248,6 +360,7 @@ export default function App() {
 
   async function moveChess(square: number) {
     if (!game || game.gameType !== 'chess' || !playerId || game.status !== 'in_progress' || busy) return;
+    prepareMoveAudio();
     const piece = game.board[square];
     const ownColor = playerSide(game.players.find((candidate) => candidate?.id === playerId));
     if (piece?.color === ownColor) {
@@ -363,6 +476,17 @@ export default function App() {
     setGameInUrl(null);
   }
 
+  function toggleMoveSounds() {
+    if (soundEnabled && !moveAudioUnlocked) {
+      prepareMoveAudio();
+      return;
+    }
+    const next = !soundEnabled;
+    setSoundEnabled(next);
+    window.localStorage.setItem('move-sounds', next ? 'on' : 'off');
+    if (next) prepareMoveAudio();
+  }
+
   const currentPlayer = game?.players.find((player) => player?.id === playerId) ?? null;
   const canJoin = game?.status === 'waiting' && !currentPlayer;
   const turnPlayer = game?.players.find((player) => playerSide(player) === game.currentTurn) ?? null;
@@ -395,7 +519,12 @@ export default function App() {
                 <p className="eyebrow">{gameName}</p>
                 <h2>{game.players[1]?.isComputer ? 'You vs Computer' : game.status === 'waiting' ? 'Waiting for a friend' : 'Your match'}</h2>
               </div>
-              <button className="quiet-button" onClick={leaveRoom}>Leave room</button>
+              <div className="game-heading-actions">
+                <button className="sound-toggle" onClick={toggleMoveSounds} aria-pressed={soundEnabled} aria-label={`Turn move sounds ${soundEnabled ? 'off' : 'on'}`}>
+                  <span aria-hidden="true">{soundEnabled ? '♫' : '♪'}</span> Sound {soundEnabled ? 'on' : 'off'}
+                </button>
+                <button className="quiet-button" onClick={leaveRoom}>Leave room</button>
+              </div>
             </div>
             {game.gameType === 'connect4' ? <>
               <div className="board-toolbar">
@@ -406,7 +535,7 @@ export default function App() {
                 ))}
               </div>
               <div className="board" role="grid" aria-label="Connect Four board">
-                {game.board.map((cell, index) => <div className="board-slot" role="gridcell" key={index}><span className={`disc ${cell ?? 'empty'}`} /></div>)}
+                {game.board.map((cell, index) => <div className={`board-slot ${lastMove?.gameId === game.id && lastMove.to === index ? 'last-destination' : ''}`} role="gridcell" key={index}><span className={`disc ${cell ?? 'empty'}`} /></div>)}
               </div>
             </> : game.gameType === 'checkers' ? <>
             <div className="checkers-board" role="grid" aria-label="Checkers board">
@@ -416,7 +545,7 @@ export default function App() {
                 const dark = (row + column) % 2 === 1;
                 const isHint = legalTargets.includes(index);
                 const ownTurn = currentPlayer && playerSide(currentPlayer) === game.currentTurn;
-                return <button key={index} role="gridcell" className={`checkers-square ${dark ? 'dark' : 'light'} ${selectedSquare === index ? 'selected' : ''} ${isHint ? 'hint' : ''}`}
+                return <button key={index} role="gridcell" className={`checkers-square ${dark ? 'dark' : 'light'} ${selectedSquare === index ? 'selected' : ''} ${isHint ? 'hint' : ''} ${lastMove?.gameId === game.id && (lastMove.from === index || lastMove.to === index) ? 'last-move' : ''} ${lastMove?.gameId === game.id && lastMove.to === index ? 'last-destination' : ''}`}
                   onClick={() => void moveChecker(index)} disabled={busy || game.status !== 'in_progress' || !ownTurn}
                   aria-label={`Row ${row + 1}, column ${column + 1}${piece ? `, ${piece.side}${piece.king ? ' king' : ''}` : ''}${isHint ? ', legal destination' : ''}`}>
                   {piece && <span className={`checker-piece ${piece.side}`}>{piece.king ? '♛' : ''}</span>}
@@ -431,10 +560,17 @@ export default function App() {
                 const piece = game.board[index];
                 const isHint = legalTargets.includes(index);
                 const ownTurn = currentPlayer?.color === game.currentTurn;
-                return <button key={index} role="gridcell" className={`chess-square ${(row + column) % 2 === 0 ? 'light' : 'dark'} ${selectedSquare === index ? 'selected' : ''} ${isHint ? 'hint' : ''}`}
+                const displayRow = Math.floor(displayIndex / 8);
+                const displayColumn = displayIndex % 8;
+                const isBlackView = currentPlayer?.color === 'black';
+                const fileLabel = String.fromCharCode((isBlackView ? 104 - displayColumn : 97 + displayColumn));
+                const rankLabel = String(isBlackView ? displayRow + 1 : 8 - displayRow);
+                return <button key={index} role="gridcell" className={`chess-square ${(row + column) % 2 === 0 ? 'light' : 'dark'} ${selectedSquare === index ? 'selected' : ''} ${isHint ? 'hint' : ''} ${isHint && piece && piece.color !== currentPlayer?.color ? 'capture-hint' : ''} ${lastMove?.gameId === game.id && (lastMove.from === index || lastMove.to === index) ? 'last-move' : ''} ${lastMove?.gameId === game.id && lastMove.to === index ? 'last-destination' : ''}`}
                   onClick={() => void moveChess(index)} disabled={busy || game.status !== 'in_progress' || !ownTurn}
                   aria-label={`Row ${8 - row}, column ${String.fromCharCode(97 + column)}${piece ? `, ${piece.color} ${piece.type}` : ''}${isHint ? ', legal destination' : ''}`}>
                   {piece && <span className={`chess-piece ${piece.color}`}>{chessGlyphs[piece.color][piece.type]}</span>}
+                  {displayColumn === 0 && <span className="chess-coordinate rank-coordinate">{rankLabel}</span>}
+                  {displayRow === 7 && <span className="chess-coordinate file-coordinate">{fileLabel}</span>}
                 </button>;
               })}
             </div>}
