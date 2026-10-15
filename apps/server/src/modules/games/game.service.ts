@@ -148,6 +148,7 @@ export async function createChessGame(playerName: unknown, opponent: 'player' | 
     ...state,
     gameType: 'chess',
     id: randomUUID(),
+    status: versusComputer ? 'in_progress' : 'waiting',
     ...(versusComputer ? { difficulty: cleanDifficulty(difficulty) as ChessDifficulty } : {}),
     players: [first, second],
     createdAt: new Date().toISOString(),
