@@ -19,64 +19,17 @@ Users must be able to:
 3. Play games against bots for free.
 4. Play games against other registered users.
 5. Participate in ranked/casual games.
-6. Participate in real-money games where legally permitted.
-7. Deposit money through M-Pesa.
-8. Stake money on eligible games.
-9. Win legitimate payouts.
-10. Withdraw available funds to an M-Pesa wallet.
-11. View their wallet and transaction history.
-12. Participate in tournaments.
-13. Receive notifications.
-14. View leaderboards and statistics.
+6. Participate in tournaments.
+7. Receive notifications.
+8. View leaderboards and statistics.
 
-The platform must be designed with strong security, financial integrity, concurrency control, auditability, and reliability.
+The platform must be designed with strong security, concurrency control, and reliability.
 
 ---
 
-# 2. Critical Requirement: Real Money
+# 2. Security and Data
 
-The real-money portion of this application must be treated as a financial system, not simply as a game feature.
-
-The system must never rely on the frontend, browser, Redis, or game client to determine a user's financial balance.
-
-PostgreSQL is the authoritative source of truth for all financial records.
-
-The financial architecture must use a ledger-based design.
-
-Never implement financial operations as simple balance modifications such as:
-
-```typescript
-user.balance += amount;
-```
-
-Instead, all financial movements must be represented by auditable ledger transactions and ledger entries.
-
-Every financial operation must be:
-
-- Atomic
-- Idempotent
-- Auditable
-- Reversible where appropriate
-- Protected against race conditions
-- Protected against duplicate payment callbacks
-- Protected against duplicate settlement
-- Protected against double spending
-
----
-
-# 3. Legal and Compliance Requirement
-
-The platform may involve real-money gaming and therefore must not be launched commercially until all applicable Kenyan legal, gambling, payment, KYC/AML, tax, responsible-gaming, and data-protection requirements have been reviewed and satisfied.
-
-Development should initially use:
-
-- Test/fake money
-- Development accounts
-- M-Pesa sandbox/test environments where available
-
-Do not bypass licensing, KYC, payment-provider restrictions, age restrictions, responsible-gaming controls, or other applicable requirements.
-
-Production payment functionality must only be enabled after the necessary legal and payment-provider requirements have been satisfied.
+Game state is stored in PostgreSQL. Account credentials are hashed, and browser sessions use HTTP-only cookies.
 
 ---
 
@@ -101,17 +54,11 @@ Production payment functionality must only be enabled after the necessary legal 
 
 - PostgreSQL
 
-PostgreSQL is the source of truth for:
+PostgreSQL stores:
 
 - Users
 - Games
 - Game results
-- Wallets
-- Ledger
-- Deposits
-- Withdrawals
-- Stakes
-- Settlements
 - Tournaments
 - Audit records
 
@@ -127,16 +74,6 @@ Redis may be used for:
 - Rate limiting
 - Sessions/cache
 - Real-time coordination
-
-Redis must NOT be the permanent source of truth for money.
-
-## Payments
-
-- Safaricom M-Pesa Daraja API
-
-The integration must support the appropriate M-Pesa APIs required by the final business/payment model.
-
-Payment callbacks must be processed idempotently.
 
 ## Deployment
 
@@ -170,7 +107,6 @@ gaming-platform/
 │   │       │   ├── auth/
 │   │       │   ├── dashboard/
 │   │       │   ├── games/
-│   │       │   ├── wallet/
 │   │       │   ├── profile/
 │   │       │   ├── leaderboard/
 │   │       │   └── admin/
@@ -190,10 +126,6 @@ gaming-platform/
 │           │   ├── users/
 │           │   ├── profiles/
 │           │   ├── kyc/
-│           │   ├── wallets/
-│           │   ├── ledger/
-│           │   ├── payments/
-│           │   │   └── mpesa/
 │           │   ├── games/
 │           │   │   └── engines/
 │           │   │       ├── chess/
@@ -256,16 +188,6 @@ The database should contain the following major domains.
 - sessions
 - kyc_profiles
 
-## Financial
-
-- wallets
-- ledger_accounts
-- ledger_transactions
-- ledger_entries
-- deposits
-- withdrawals
-- payment_provider_events
-
 ## Games
 
 - game_types
@@ -274,12 +196,6 @@ The database should contain the following major domains.
 - game_players
 - game_moves
 - game_results
-
-## Real-Money Gaming
-
-- stakes
-- stake_participants
-- settlements
 
 ## Tournaments
 
@@ -295,41 +211,9 @@ The database should contain the following major domains.
 
 ---
 
-# 7. Financial Ledger Rules
-
-The ledger is the authoritative financial record.
-
-A completed ledger transaction must balance:
-
-```text
-Total Debits = Total Credits
-```
-
-Financial amounts should use:
-
-```text
-NUMERIC(18,2)
-```
-
-and currency should initially be:
-
-```text
-KES
-```
-
-Do not use floating-point numbers for money.
-
-A wallet should conceptually contain accounts such as:
-
-```text
-AV
-```
-
----
-
 # 8. Getting Started
 
-The current playable prototype includes free Connect Four, Checkers, and Chess. All three support friend rooms, rematches, and a computer opponent with Easy, Medium, or Hard difficulty; rematches keep the selected difficulty. Checkers has optional captures, multi-jumps, kings, and legal-move hints. Chess supports checkmate, castling, en passant, selectable queen/rook/bishop/knight promotion, and claimable and automatic draw conditions. The prototype is intended for local development and does not include payment functionality. Game state is stored in PostgreSQL and survives API restarts.
+The current playable prototype includes free Connect Four, Checkers, and Chess. All three support friend rooms, rematches, and a computer opponent with Easy, Medium, or Hard difficulty; rematches keep the selected difficulty. Checkers has optional captures, multi-jumps, kings, and legal-move hints. Chess supports checkmate, castling, en passant, selectable queen/rook/bishop/knight promotion, and claimable and automatic draw conditions. Game state is stored in PostgreSQL and survives API restarts.
 
 Requirements: Node.js 20.19.3 or newer and npm.
 
