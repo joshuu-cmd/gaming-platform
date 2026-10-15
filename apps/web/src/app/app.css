@@ -56,6 +56,8 @@ button:focus-visible, input:focus-visible, a:focus-visible { outline: 3px solid 
 .join-card { background: #e5eddb; }
 .card-topline { display: flex; align-items: center; gap: 14px; margin-bottom: 20px; }
 .card-icon { width: 37px; height: 37px; display: grid; place-items: center; border: 2px solid var(--ink); border-radius: 7px; margin-bottom: 20px; font-size: 20px; font-weight: 800; box-shadow: 2px 2px 0 var(--ink); }
+.card-icon > svg { display: block; width: 27px; height: 27px; animation: lobby-game-icon-in .2s ease-out both; }
+.card-icon .lobby-icon-piece { width: 28px; height: 28px; transform: none; animation: lobby-game-icon-in .2s ease-out both; }
 .card-topline .card-icon { margin-bottom: 0; }
 .card-game-tag { color: var(--ink); font-size: 16px; font-weight: 800; }
 .sun-icon { color: var(--ink); background: var(--yellow); }
@@ -225,11 +227,12 @@ footer { border-top: 2px solid var(--ink); display: flex; justify-content: space
 .avatar.blue, .status-dot.blue { background: #315be8; color: #fffdf6; }
 @keyframes piece-land { from { transform: translateY(-10%) scale(1.08); filter: brightness(1.2); } to { transform: translateY(0) scale(1); } }
 @keyframes chess-piece-slide { from { transform: translate(0, 0); } to { transform: translate(var(--move-x), var(--move-y)); } }
+@keyframes lobby-game-icon-in { from { opacity: .45; transform: scale(.78); } to { opacity: 1; transform: scale(1); } }
 @keyframes result-badge-pop { 0% { opacity: 0; transform: scale(.55) translateY(10%); } 72% { opacity: 1; transform: scale(1.12) translateY(-3%); } 100% { opacity: 1; transform: scale(1) translateY(0); } }
 @keyframes result-dialog-in { from { opacity: 0; transform: translateY(14px) scale(.95); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes ludo-token-pulse { from { box-shadow: inset 0 2px 2px #ffffff9e, 0 0 0 1px #f6d34f; } to { box-shadow: inset 0 2px 2px #ffffff9e, 0 0 0 4px #f6d34f; } }
 @media (prefers-reduced-motion: reduce) {
-  .chess-moving-piece, .chess-result-badge, .result-dialog, .ludo-pawn.movable { animation-duration: .01ms; }
+  .card-icon > svg, .card-icon .lobby-icon-piece, .chess-moving-piece, .chess-result-badge, .result-dialog, .ludo-pawn.movable { animation-duration: .01ms; }
 }
 .match-sidebar { display: flex; flex-direction: column; gap: 13px; }
 .side-card { padding: 16px 15px; }

@@ -117,6 +117,29 @@ function CrownIcon() {
   </svg>;
 }
 
+function LobbyGameIcon({ game }: { game: GameType }) {
+  if (game === 'chess') return <ChessPieceGlyph type="knight" color="white" className="lobby-icon-piece" />;
+  if (game === 'checkers') return <svg viewBox="0 0 32 32" aria-hidden="true">
+    <circle cx="16" cy="17" r="12" fill="#f16e53" stroke="#192e2c" strokeWidth="2" />
+    <circle cx="16" cy="17" r="8.5" fill="none" stroke="#ffd2a5" strokeWidth="1.5" />
+    <path d="m9 15 4 3 3-6 3 6 4-3-1.5 7h-11L9 15Z" fill="#fffdf6" stroke="#192e2c" strokeLinejoin="round" strokeWidth="1" />
+  </svg>;
+  if (game === 'ludo') return <svg viewBox="0 0 32 32" aria-hidden="true">
+    <rect x="4" y="4" width="24" height="24" rx="6" fill="#fffdf6" stroke="#192e2c" strokeWidth="2" />
+    <circle cx="10" cy="10" r="2.5" fill="#f16e53" />
+    <circle cx="22" cy="10" r="2.5" fill="#315be8" />
+    <circle cx="16" cy="16" r="2.5" fill="#6e9a3e" />
+    <circle cx="10" cy="22" r="2.5" fill="#f3c74f" />
+    <circle cx="22" cy="22" r="2.5" fill="#f16e53" />
+  </svg>;
+  return <svg viewBox="0 0 32 32" aria-hidden="true">
+    <circle cx="10" cy="11" r="7" fill="#f3c74f" stroke="#192e2c" strokeWidth="2" />
+    <circle cx="22" cy="21" r="7" fill="#f16e53" stroke="#192e2c" strokeWidth="2" />
+    <circle cx="10" cy="11" r="2.4" fill="#fffdf6" />
+    <circle cx="22" cy="21" r="2.4" fill="#fffdf6" />
+  </svg>;
+}
+
 let moveAudioContext: AudioContext | null = null;
 let moveAudioUnlocked = false;
 
@@ -1117,7 +1140,7 @@ export default function App() {
         </section>
         <section className="lobby" aria-label="Start or join a match">
           <div className="lobby-card computer-card">
-            <div className="card-topline"><div className="card-icon computer-icon">♟</div><span className="card-game-tag">{selectedGameName}</span></div>
+            <div className="card-topline"><div className={`card-icon computer-icon ${selectedGame}`}><LobbyGameIcon key={selectedGame} game={selectedGame} /></div><span className="card-game-tag">{selectedGameName}</span></div>
             <p className="eyebrow">{selectedGameName.toUpperCase()} · SOLO PLAY</p>
             <h2>Play vs computer</h2>
             <p className="card-copy">Choose a difficulty and play {selectedGameName} against the computer.</p>
@@ -1135,7 +1158,7 @@ export default function App() {
           </div>
 
           <div className="lobby-card create-card">
-            <div className="card-topline"><div className="card-icon sun-icon">✳</div><span className="card-game-tag">{selectedGameName}</span></div>
+            <div className="card-topline"><div className={`card-icon sun-icon ${selectedGame}`}><LobbyGameIcon key={selectedGame} game={selectedGame} /></div><span className="card-game-tag">{selectedGameName}</span></div>
             <p className="eyebrow">{selectedGameName.toUpperCase()} · PLAY WITH SOMEONE</p>
             <h2>Choose your opponent</h2>
             <p className="card-copy">Create a {selectedGameName} room and invite someone to play.</p>
@@ -1147,7 +1170,7 @@ export default function App() {
           </div>
 
           <div className="lobby-card join-card">
-            <div className="card-icon green-icon">↗</div>
+            <div className={`card-icon green-icon ${selectedGame}`}><LobbyGameIcon key={selectedGame} game={selectedGame} /></div>
             <p className="eyebrow">GOT AN INVITE?</p>
             <h2>Join a room</h2>
             <p className="card-copy">Paste the room code your friend sent you.</p>
