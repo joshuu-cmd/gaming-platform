@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type CSSProperties, type FormEvent } from 'react';
 import ChessPieceGlyph from './ChessPieceGlyph';
 import LudoBoard from './LudoBoard';
 import './app.css';
@@ -280,6 +280,7 @@ export default function App() {
   const [promotionSquare, setPromotionSquare] = useState<number | null>(null);
   const [soundEnabled, setSoundEnabled] = useState(() => window.localStorage.getItem('move-sounds') !== 'off');
   const [lastMove, setLastMove] = useState<LastMove | null>(null);
+  const [animatingChessMove, setAnimatingChessMove] = useState<LastMove | null>(null);
   const [dismissedResultGameId, setDismissedResultGameId] = useState<string | null>(null);
   const previousGameRef = useRef<Game | null>(null);
   const moveHintsPositionKey = game?.gameType === 'chess'
@@ -301,6 +302,7 @@ export default function App() {
       const move = inferLastMove(previous, game);
       if (move) {
         setLastMove(move);
+        if (game.gameType === 'chess') setAnimatingChessMove(move);
         if (soundEnabled) {
           const previousPieceCount = gamePieceCount(previous);
           const currentPieceCount = gamePieceCount(game);
@@ -322,6 +324,12 @@ export default function App() {
     }
     previousGameRef.current = game;
   }, [game, playerId, soundEnabled]);
+
+  useEffect(() => {
+    if (!animatingChessMove) return;
+    const timeout = window.setTimeout(() => setAnimatingChessMove(null), 280);
+    return () => window.clearTimeout(timeout);
+  }, [animatingChessMove]);
 
   useEffect(() => {
     if (!game || !account) return;
@@ -706,6 +714,7 @@ export default function App() {
     const promotionMove = movingPiece?.type === 'pawn'
       && Math.floor(square / 8) === (movingPiece.color === 'white' ? 0 : 7);
     setPendingChessMove({ gameId: game.id, from, to: square, promotion: promotionMove ? promotion : 'queen' });
+    setAnimatingChessMove({ gameId: game.id, from, to: square });
     setError('');
     setBusy(true);
     try {
@@ -724,6 +733,7 @@ export default function App() {
       setPromotionSquare(null);
     } catch (reason) {
       setPendingChessMove(null);
+      setAnimatingChessMove(null);
       setError((reason as Error).message);
     } finally {
       setBusy(false);
@@ -995,6 +1005,8 @@ export default function App() {
                 const row = Math.floor(index / 8);
                 const column = index % 8;
                 const piece = visibleChessBoard ? visibleChessBoard[index] : game.board[index];
+                const activeMove = pendingChessMove?.gameId === game.id ? pendingChessMove : animatingChessMove?.gameId === game.id ? animatingChessMove : null;
+                const isAnimatedDestination = activeMove?.to === index;
                 const isHint = legalTargets.includes(index);
                 const ownTurn = currentPlayer?.color === game.currentTurn;
                 const displayRow = Math.floor(displayIndex / 8);
@@ -1007,13 +1019,30 @@ export default function App() {
                 return <button key={index} role="gridcell" className={`chess-square ${(row + column) % 2 === 0 ? 'light' : 'dark'} ${selectedSquare === index ? 'selected' : ''} ${isHint ? 'hint' : ''} ${isHint && piece && piece.color !== currentPlayer?.color ? 'capture-hint' : ''} ${lastMove?.gameId === game.id && (lastMove.from === index || lastMove.to === index) ? 'last-move' : ''} ${lastMove?.gameId === game.id && lastMove.to === index ? 'last-destination' : ''} ${isResultKing ? 'chess-result-square' : ''}`}
                   onClick={() => void moveChess(index)} disabled={busy || game.status !== 'in_progress' || !ownTurn}
                   aria-label={`Row ${8 - row}, column ${String.fromCharCode(97 + column)}${piece ? `, ${piece.color} ${piece.type}` : ''}${isHint ? ', legal destination' : ''}`}>
-                  {piece && <ChessPieceGlyph type={piece.type} color={piece.color} />}
+                  {piece && !isAnimatedDestination && <ChessPieceGlyph type={piece.type} color={piece.color} />}
                   {resultBadge && <span className={`chess-result-badge ${resultBadge}`} role="img" aria-label={resultBadge === 'winner' ? 'Winning king' : 'Defeated king'}><CrownIcon /></span>}
                   {displayColumn === 0 && <span className="chess-coordinate rank-coordinate">{rankLabel}</span>}
                   {displayRow === 7 && <span className="chess-coordinate file-coordinate">{fileLabel}</span>}
                 </button>;
               })}
               </div>
+              {(() => {
+                const activeMove = pendingChessMove?.gameId === game.id ? pendingChessMove : animatingChessMove?.gameId === game.id ? animatingChessMove : null;
+                const movingPiece = activeMove && game.board[activeMove.from];
+                if (!activeMove || !movingPiece) return null;
+                const blackView = currentPlayer?.color === 'black';
+                const fromDisplay = blackView ? 63 - activeMove.from : activeMove.from;
+                const toDisplay = blackView ? 63 - activeMove.to : activeMove.to;
+                const fromRow = Math.floor(fromDisplay / 8);
+                const fromColumn = fromDisplay % 8;
+                const rowDelta = Math.floor(toDisplay / 8) - fromRow;
+                const columnDelta = (toDisplay % 8) - fromColumn;
+                const promoted = movingPiece.type === 'pawn' && (Math.floor(activeMove.to / 8) === 0 || Math.floor(activeMove.to / 8) === 7);
+                return <div key={`${activeMove.from}-${activeMove.to}`} className="chess-moving-piece" aria-hidden="true"
+                  style={{ left: `calc(3px + ${fromColumn * 12.5}% - ${fromColumn * 0.75}px)`, top: `calc(3px + ${fromRow * 12.5}% - ${fromRow * 0.75}px)`, '--move-x': `${columnDelta * 100}%`, '--move-y': `${rowDelta * 100}%` } as CSSProperties}>
+                  <ChessPieceGlyph type={promoted ? ('promotion' in activeMove ? activeMove.promotion : 'queen') : movingPiece.type} color={movingPiece.color} />
+                </div>;
+              })()}
               {game.gameType === 'chess' && promotionSquare !== null && promotionDisplayColumn !== null && (
                 <div className="promotion-menu" role="group" aria-label="Choose a promotion piece" style={{ left: `calc(3px + ${promotionDisplayColumn * 12.5}% - ${promotionDisplayColumn * 0.75}px)` }}>
                 {(['queen', 'rook', 'bishop', 'knight'] as const).map((type) => (
