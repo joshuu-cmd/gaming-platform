@@ -1173,7 +1173,11 @@ export default function App() {
           </div>
 
           <div className="lobby-card join-card">
-            <div className={`card-icon green-icon ${selectedGame}`}><LobbyGameIcon key={selectedGame} game={selectedGame} /></div>
+            <div className="card-icon green-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" strokeWidth="2.5">
+                <path d="M7 17 17 7M8 7h9v9" />
+              </svg>
+            </div>
             <p className="eyebrow">GOT AN INVITE?</p>
             <h2>Join a room</h2>
             <p className="card-copy">Paste the room code your friend sent you.</p>
