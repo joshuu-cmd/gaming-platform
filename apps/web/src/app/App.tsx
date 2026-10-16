@@ -1061,9 +1061,12 @@ export default function App() {
                 const rowDelta = Math.floor(toDisplay / 8) - fromRow;
                 const columnDelta = (toDisplay % 8) - fromColumn;
                 const promoted = movingPiece.type === 'pawn' && (Math.floor(activeMove.to / 8) === 0 || Math.floor(activeMove.to / 8) === 7);
+                const promotionType: ChessPiece['type'] = 'promotion' in activeMove
+                  ? activeMove.promotion as ChessPiece['type']
+                  : 'queen';
                 return <div key={`${activeMove.from}-${activeMove.to}`} className="chess-moving-piece" aria-hidden="true"
                   style={{ left: `calc(3px + ${fromColumn * 12.5}% - ${fromColumn * 0.75}px)`, top: `calc(3px + ${fromRow * 12.5}% - ${fromRow * 0.75}px)`, '--move-x': `${columnDelta * 100}%`, '--move-y': `${rowDelta * 100}%` } as CSSProperties}>
-                  <ChessPieceGlyph type={promoted ? ('promotion' in activeMove ? activeMove.promotion : 'queen') : movingPiece.type} color={movingPiece.color} />
+                  <ChessPieceGlyph type={promoted ? promotionType : movingPiece.type} color={movingPiece.color} />
                 </div>;
               })()}
               {game.gameType === 'chess' && promotionSquare !== null && promotionDisplayColumn !== null && (
